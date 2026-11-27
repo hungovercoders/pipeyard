@@ -47,7 +47,7 @@ stop the task.
 
 ## Where everything is stored
 
-One bucket, one prefix per org, six kinds of object. There is no database.
+One bucket, one prefix per org, seven kinds of object. There is no database.
 
 ```
 orgs/{org_id}/pipelines/{name}/pipeline.yaml
@@ -56,6 +56,7 @@ orgs/{org_id}/datasets/{dataset}/run={run_id}/*.parquet
 orgs/{org_id}/datasets/{dataset}/run={run_id}/_manifest.json
 orgs/{org_id}/reports/{pipeline}/{slug}.json
 orgs/{org_id}/contracts/{dataset}.odcs.yaml
+orgs/{org_id}/lineage/{run_id}/1-start.json, 2-complete.json or 2-fail.json
 ```
 
 | What | Format | Written by |
@@ -65,6 +66,7 @@ orgs/{org_id}/contracts/{dataset}.odcs.yaml
 | Data | Parquet, one or more files per run | Your container |
 | Manifest | JSON: dataset, run id, row count, schema | Your container, last |
 | Data contract | An ODCS YAML document, exactly as registered | pipeyard, when you add or edit one |
+| Lineage event | An [OpenLineage](lineage.md) JSON event | pipeyard, when a run or report starts and ends |
 | Report app record | JSON: starting, running or stopped; expiry; address | pipeyard, as a report starts and stops |
 
 Each run writes into its own `run={run_id}/` folder, so runs never overwrite each other. A
@@ -157,6 +159,7 @@ Everything the UI does is available as JSON. Send `Authorization: Bearer <token>
 | `POST /api/pipelines/{name}/runs` | Trigger a run. Returns the run record. |
 | `GET /api/pipelines/{name}/runs` | A pipeline's runs, newest first |
 | `GET /api/runs/{run_id}` | One run. Poll this until `status` is no longer `running`. |
+| `GET /api/runs/{run_id}/lineage` | The [OpenLineage](lineage.md) events recorded for a run or a report start |
 | `GET /api/datasets` | Datasets, with row counts, schema and contract summary |
 | `PUT /api/datasets/{dataset}/contract` | Register or replace a dataset's data contract. The body is an ODCS document. |
 | `GET`, `DELETE /api/datasets/{dataset}/contract` | Read it back as YAML, or remove it |

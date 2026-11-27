@@ -251,3 +251,7 @@ def data_contracts_prefix(org_id: str) -> str:
 
 def data_contract_key(org_id: str, dataset: str) -> str:
     return f"{data_contracts_prefix(org_id)}{dataset}.odcs.yaml"
+
+
+def lineage_prefix(org_id: str, run_id: str) -> str:
+    return f"{org_prefix(org_id)}lineage/{run_id}/"

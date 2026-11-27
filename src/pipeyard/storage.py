@@ -230,3 +230,24 @@ class Storage:
             for obj in page.get("Contents", [])
             if obj["Key"].endswith(suffix)
         )
+
+    # lineage (OpenLineage events, one object per event)
+
+    def put_lineage_event(self, org_id: str, run_id: str, event: dict) -> None:
+        # One object per transition, so settling a run twice at once stores its end once.
+        order = "1" if event["eventType"] == "START" else "2"
+        name = f"{order}-{event['eventType'].lower()}.json"
+        key = contract.lineage_prefix(org_id, run_id) + name
+        self._put(org_id, key, json.dumps(event), "application/json")
+
+    def list_lineage_events(self, org_id: str, run_id: str) -> list[dict]:
+        prefix = contract.lineage_prefix(org_id, run_id)
+        s3 = self._s3(org_id)
+        keys = sorted(
+            obj["Key"]
+            for page in s3.get_paginator("list_objects_v2").paginate(
+                Bucket=self.bucket, Prefix=prefix
+            )
+            for obj in page.get("Contents", [])
+        )
+        return [json.loads(self._get(org_id, key)) for key in keys]

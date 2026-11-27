@@ -207,6 +207,7 @@ orgs/{org_id}/runs/{run_id}.json
 orgs/{org_id}/datasets/{dataset}/run={run_id}/*.parquet + _manifest.json
 orgs/{org_id}/reports/{pipeline}/{slug}.json
 orgs/{org_id}/contracts/{dataset}.odcs.yaml
+orgs/{org_id}/lineage/{run_id}/*.json
 ```
 
 `run={run_id}` is a Hive-style partition, and runs append: a dataset is every finished

@@ -24,6 +24,7 @@ from . import contract, datacontract, proxy, query
 from .auth import COOKIE, Auth, AuthError
 from .config import Settings
 from .contract import ContractError, PipelineSpec, Report, ReportApp, RunRecord
+from .lineage import Lineage, error_facet, job_type_facet, schema_facet, statistics_facet
 from .runner import TIMEOUT_EXIT_CODE, Job, Runner, make_runner
 from .storage import Storage, org_credentials
 
@@ -95,6 +96,8 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         title="pipeyard", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
     )
     app.state.storage = storage
+    lineage = Lineage(settings, storage)
+    app.state.lineage = lineage
     # For the report proxy. trust_env=False: report apps are on private addresses, so
     # never send their traffic through an outbound proxy from the environment.
     http = httpx.AsyncClient(
@@ -221,6 +224,65 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             return None
         return f"data contract {dc.label} is not met:\n" + "\n".join(f"- {p}" for p in problems)
 
+    # --- lineage (OpenLineage) ---------------------------------------------------------
+
+    PIPELINE_JOB = job_type_facet("JOB")
+    REPORT_JOB = job_type_facet("REPORT_APP", processing="STREAMING")
+
+    def run_inputs(org_id: str, spec: PipelineSpec | None) -> list[dict]:
+        return [lineage.dataset(org_id, i.dataset) for i in (spec.inputs if spec else [])]
+
+    def emit_run_start(run: RunRecord, spec: PipelineSpec) -> None:
+        event = lineage.event(
+            "START",
+            org_id=run.org_id,
+            run_id=run.run_id,
+            job=run.pipeline,
+            job_type=PIPELINE_JOB,
+            when=run.started_at,
+            inputs=run_inputs(run.org_id, spec),
+            outputs=[lineage.dataset(run.org_id, run.dataset)],
+        )
+        lineage.emit(run.org_id, run.run_id, event)
+
+    def emit_run_end(run: RunRecord, columns: list[dict]) -> None:
+        ok = run.status == "succeeded"
+        facets = {"schema": schema_facet(columns)} if ok and columns else {}
+        extra = (
+            {"outputFacets": {"outputStatistics": statistics_facet(run.row_count)}} if ok else {}
+        )
+        event = lineage.event(
+            "COMPLETE" if ok else "FAIL",
+            org_id=run.org_id,
+            run_id=run.run_id,
+            job=run.pipeline,
+            job_type=PIPELINE_JOB,
+            when=run.finished_at,
+            inputs=run_inputs(run.org_id, storage.get_pipeline(run.org_id, run.pipeline)),
+            outputs=[lineage.dataset(run.org_id, run.dataset, facets, **extra)],
+            run_facets={} if ok else {"errorMessage": error_facet(run.error or "failed")},
+        )
+        lineage.emit(run.org_id, run.run_id, event)
+
+    def emit_report(app_: ReportApp, event_type: str) -> None:
+        """A report app is a job that reads a dataset: START on start, an end when it stops."""
+        try:
+            _, report = get_report(app_.org_id, app_.pipeline, app_.slug)
+        except HTTPException:
+            return  # the report was removed from pipeline.yaml while its app was running
+        failed = event_type == "FAIL"
+        event = lineage.event(
+            event_type,
+            org_id=app_.org_id,
+            run_id=app_.instance_id,
+            job=f"{app_.pipeline}.{app_.slug}",
+            job_type=REPORT_JOB,
+            when=app_.started_at if event_type == "START" else None,
+            inputs=[lineage.dataset(app_.org_id, report.dataset)],
+            run_facets={"errorMessage": error_facet(app_.error or "failed")} if failed else {},
+        )
+        lineage.emit(app_.org_id, app_.instance_id, event)
+
     def reconcile(run: RunRecord) -> RunRecord:
         """If a run is still marked running, ask the runner and settle the record."""
         if run.status != "running" or run.handle is None:
@@ -228,6 +290,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         state = runner.poll(run.handle)
         if state.running:
             return run
+        columns: list[dict] = []  # what the run declared it wrote, for its lineage event
         if state.gone:
             # Another request may have settled this run and cleaned up in the meantime.
             latest = storage.get_run(run.org_id, run.run_id)
@@ -249,6 +312,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
                 try:
                     manifest = contract.parse_manifest(text, dataset=run.dataset, run_id=run.run_id)
                     run.row_count = manifest.row_count
+                    columns = [c.model_dump() for c in manifest.schema_]
                     error = contract_problem(run)
                 except ContractError as e:
                     error = str(e)
@@ -262,6 +326,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         run.error = error
         run.finished_at = datetime.now(UTC)
         storage.put_run(run)
+        emit_run_end(run, columns)
         if error:
             # Report apps read the dataset's files directly, so a failed run must not leave
             # any behind: after this, a run= directory with a manifest is always a good one.
@@ -369,6 +434,9 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
                 run.started_at,
             )
         storage.put_run(run)
+        emit_run_start(run, spec)
+        if run.status == "failed":
+            emit_run_end(run, [])
         return run
 
     # --- report apps ------------------------------------------------------------------
@@ -426,6 +494,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
     def stopped(app_: ReportApp, error: str | None = None) -> ReportApp:
         app_.status, app_.error = "stopped", error
         storage.put_report_app(app_)
+        emit_report(app_, "FAIL" if error else "COMPLETE")
         routes.pop((app_.org_id, app_.pipeline, app_.slug), None)
         usage.pop((app_.org_id, app_.pipeline, app_.slug), None)
         if app_.handle:
@@ -499,7 +568,10 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         except Exception as e:  # noqa: BLE001 - any start failure is shown on the report page
             app_.status, app_.error = "stopped", f"could not start: {e}"
         storage.put_report_app(app_)
-        if app_.status != "stopped":
+        emit_report(app_, "START")
+        if app_.status == "stopped":
+            emit_report(app_, "FAIL")
+        else:
             touch(app_)
         return app_
 
@@ -616,6 +688,14 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         if run is None:
             raise HTTPException(404, f"run '{run_id}' not found")
         return reconcile(run).model_dump(exclude={"handle"})
+
+    @app.get("/api/runs/{run_id}/lineage")
+    def api_run_lineage(org_id: Org, run_id: RunId):
+        """The OpenLineage events recorded for a pipeline run or a report app instance."""
+        events = storage.list_lineage_events(org_id, run_id)
+        if not events:
+            raise HTTPException(404, f"no lineage recorded for '{run_id}'")
+        return events
 
     @app.get("/api/datasets")
     def api_datasets(org_id: Org):

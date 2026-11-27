@@ -164,13 +164,25 @@ def _docker_inspect(monkeypatch, state, timeout=60):
         out = ""
         if cmd[1] == "inspect":
             labels = {runner_module.TIMEOUT_LABEL: str(timeout)}
-            out = json.dumps({"State": state, "Config": {"Labels": labels}})
+            out = json.dumps({"State": _resolve(state), "Config": {"Labels": labels}})
         if cmd[1] == "logs":
             out = "Traceback: boom"
         return type("P", (), {"returncode": 0, "stdout": out, "stderr": ""})
 
     monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
     return calls
+
+
+class Ago(float):
+    """A moment this many seconds before the test runs.
+
+    Resolved inside the test, not when the module is collected: collection can be a minute
+    before a test at the end of the suite runs, which would shift every timestamp.
+    """
+
+
+def _resolve(state: dict) -> dict:
+    return {k: _ts(v) if isinstance(v, Ago) else v for k, v in state.items()}
 
 
 def _ts(seconds_ago: float) -> str:
@@ -184,7 +196,7 @@ def test_docker_timeout_survives_a_control_plane_restart(monkeypatch, settings):
     """No timer exists (the process restarted), but the container is past its deadline."""
     calls = _docker_inspect(
         monkeypatch,
-        {"Status": "running", "StartedAt": _ts(90), "FinishedAt": NOT_YET, "ExitCode": 0},
+        {"Status": "running", "StartedAt": Ago(90), "FinishedAt": NOT_YET, "ExitCode": 0},
     )
     state = DockerRunner(settings).poll("c")
     assert (state.running, state.exit_code) == (False, TIMEOUT_EXIT_CODE)
@@ -195,29 +207,29 @@ def test_docker_timeout_survives_a_control_plane_restart(monkeypatch, settings):
     ("state", "expected"),
     [
         (
-            {"Status": "running", "StartedAt": _ts(5), "FinishedAt": NOT_YET, "ExitCode": 0},
+            {"Status": "running", "StartedAt": Ago(5), "FinishedAt": NOT_YET, "ExitCode": 0},
             RunState(True),
         ),
         (
-            {"Status": "exited", "StartedAt": _ts(70), "FinishedAt": _ts(9), "ExitCode": 137},
+            {"Status": "exited", "StartedAt": Ago(70), "FinishedAt": Ago(9), "ExitCode": 137},
             RunState(False, TIMEOUT_EXIT_CODE, "timed out"),
         ),
         (
             {
                 "Status": "exited",
-                "StartedAt": _ts(70),
-                "FinishedAt": _ts(60),
+                "StartedAt": Ago(70),
+                "FinishedAt": Ago(60),
                 "ExitCode": 137,
                 "OOMKilled": True,
             },
             RunState(False, 137, "out of memory\nTraceback: boom"),
         ),
         (
-            {"Status": "exited", "StartedAt": _ts(70), "FinishedAt": _ts(60), "ExitCode": 1},
+            {"Status": "exited", "StartedAt": Ago(70), "FinishedAt": Ago(60), "ExitCode": 1},
             RunState(False, 1, "Traceback: boom"),
         ),
         (
-            {"Status": "exited", "StartedAt": _ts(70), "FinishedAt": _ts(60), "ExitCode": 0},
+            {"Status": "exited", "StartedAt": Ago(70), "FinishedAt": Ago(60), "ExitCode": 0},
             RunState(False, 0),
         ),
     ],

@@ -36,6 +36,7 @@ class PipeyardStack(Stack):
         *,
         org_id: str,
         certificate_arn: str | None = None,
+        openlineage_url: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(scope, id, **kwargs)
@@ -195,6 +196,10 @@ class PipeyardStack(Stack):
             ),
         )
         service.target_group.configure_health_check(path="/healthz")
+        if openlineage_url:  # also send lineage events to an OpenLineage server
+            service.task_definition.default_container.add_environment(
+                "OPENLINEAGE_URL", openlineage_url
+            )
         report_security_group.connections.allow_from(
             service.service, ec2.Port.tcp(REPORT_PORT), "control plane proxy"
         )
