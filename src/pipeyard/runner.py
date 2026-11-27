@@ -35,7 +35,7 @@ class Runner(Protocol):
 
 
 class DockerRunner:
-    """Local mode: ``docker run`` on the compose network, so the container can reach MinIO."""
+    """Local mode: ``docker run`` on the compose network, where the AWS emulator lives."""
 
     def __init__(self, settings: Settings):
         self.network = settings.docker_network

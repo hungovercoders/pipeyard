@@ -21,7 +21,7 @@ flowchart LR
     end
     idp[(Cognito / dev stub)]
     task[[Your container<br/>ORG_ID, RUN_ID, OUTPUT_URI]]
-    s3[(S3 / MinIO<br/>orgs/org_id/pipelines<br/>orgs/org_id/runs<br/>orgs/org_id/datasets)]
+    s3[(S3 / local emulator<br/>orgs/org_id/pipelines<br/>orgs/org_id/runs<br/>orgs/org_id/datasets)]
 
     user -- token --> api
     api --> auth -. verifies .-> idp
@@ -42,7 +42,7 @@ You need Docker and [mise](https://mise.jdx.dev) (or install Python 3.12, uv and
 
 ```sh
 mise install        # python, uv, task, node, awscli, cdk at pinned versions
-task up             # MinIO + control plane on http://localhost:8000 (leave running)
+task up             # AWS emulator + control plane on http://localhost:8000 (leave running)
 ```
 
 In a second terminal:
@@ -56,21 +56,25 @@ triggers a run (about 10,000 fake transactions), waits for it, and prints the fi
 the "Daily volume" report. Then open <http://localhost:8000>: the pipelines list, the
 pipeline's runs and trigger button, the datasets list and both reports (table + chart).
 
-In local mode you are signed in automatically as org `demo`. The MinIO console is at
-<http://localhost:9001> (`pipeyard` / `pipeyard-secret`).
+In local mode you are signed in automatically as org `demo`.
+
+Local S3 is [moto server](https://docs.getmoto.org/en/latest/docs/server_mode.html), an
+open-source emulator of the AWS APIs, on <http://localhost:4566>. Any credentials work,
+for example `AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x aws --endpoint-url
+http://localhost:4566 s3 ls --recursive s3://pipeyard/`. Its state is **in memory**:
+`task down` or a restart of the emulator clears every pipeline, run and dataset.
 
 | Task | What it does |
 |---|---|
 | `task up` / `task down` | Start / stop the local stack |
 | `task demo` | The end-to-end example |
-| `task test` | Tests (they use MinIO as their S3, and a fake runner) |
+| `task test` | Tests (they use the emulator as their S3, and a fake runner) |
 | `task lint` / `task fmt` | Ruff |
 | `task synth` / `task deploy` | CloudFormation template / deploy to AWS |
 
-> **MinIO image.** `minio/minio` could not be pulled from Docker Hub when this was built,
-> so `docker-compose.yml` defaults to `pgsty/minio`, a community build of the same server.
-> Set `MINIO_IMAGE` to use another S3-compatible image. If Docker Hub rate-limits the
-> Python base image, run `BASE_IMAGE=public.ecr.aws/docker/library/python:3.12-slim task demo`.
+> **Why moto and not LocalStack?** The LocalStack image now exits at start-up without a
+> `LOCALSTACK_AUTH_TOKEN`. To use it anyway, set `AWS_EMULATOR_IMAGE` and adjust the port
+> mapping in `docker-compose.yml`. If Docker Hub rate-limits the Python base image, run `BASE_IMAGE=public.ecr.aws/docker/library/python:3.12-slim task demo`.
 
 ## Writing a pipeline
 

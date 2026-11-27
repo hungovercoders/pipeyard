@@ -1,19 +1,15 @@
-# Local S3. The control plane runs on the host (`task up`); run containers join this
-# project's default network (pipeyard_default) and reach MinIO as http://minio:9000.
+# Local AWS: moto server, an open-source emulator of the AWS APIs, used here for S3.
+# The control plane runs on the host (`task up`) and talks to it on localhost:4566; run
+# containers join this project's default network (pipeyard_default) and use
+# http://aws:5000. State is in memory: restarting the emulator starts from an empty bucket.
 name: pipeyard
 services:
-  minio:
-    # minio/minio is no longer published on Docker Hub; pgsty/minio is a community build of
-    # the same server. Any S3-compatible image with the same CLI works: set MINIO_IMAGE.
-    image: ${MINIO_IMAGE:-pgsty/minio:latest}
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: pipeyard
-      MINIO_ROOT_PASSWORD: pipeyard-secret
+  aws:
+    image: ${AWS_EMULATOR_IMAGE:-motoserver/moto:5.1.22}
     ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio-data:/data
-volumes:
-  minio-data:
+      - "4566:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:5000/moto-api/data.json"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

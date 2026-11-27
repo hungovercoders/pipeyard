@@ -15,19 +15,19 @@ tasks:
     desc: Install Python dependencies
     cmds: [uv sync]
 
-  minio:
-    desc: Start MinIO (local S3) in the background
-    cmds: [docker compose up -d --wait minio]
+  emulator:
+    desc: Start the local AWS emulator (moto server, used for S3) in the background
+    cmds: [docker compose up -d --wait aws]
 
   up:
-    desc: Start MinIO and the control plane on http://localhost:8000
-    deps: [setup, minio]
+    desc: Start the AWS emulator and the control plane on http://localhost:8000
+    deps: [setup, emulator]
     cmds:
       - uv run uvicorn --factory pipeyard.app:create_app --host 127.0.0.1 --port 8000
 
   down:
-    desc: Stop MinIO (add `-- -v` to also delete its data)
-    cmds: ["docker compose down {{.CLI_ARGS}}"]
+    desc: Stop the AWS emulator (its data is in memory, so this clears it)
+    cmds: [docker compose down]
 
   build-example:
     desc: Build the example pipeline image locally
@@ -52,8 +52,8 @@ tasks:
       - uv run ruff check --fix .
 
   test:
-    desc: Run the tests (they use MinIO as their S3)
-    deps: [minio]
+    desc: Run the tests (they use the AWS emulator as their S3)
+    deps: [emulator]
     cmds: ["uv run pytest {{.CLI_ARGS}}"]
 
   # --- AWS ---------------------------------------------------------------------------

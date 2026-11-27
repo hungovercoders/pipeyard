@@ -26,7 +26,7 @@ def org_credentials(settings: Settings, org_id: str, *, fresh: bool = False) -> 
     AWS: assume the run role with an ``org_id`` session tag; its policy is ABAC on
     ``${aws:PrincipalTag/org_id}``. The same credentials go to run containers and to DuckDB,
     so IAM enforces the org boundary even if application code gets it wrong.
-    Local: MinIO root credentials (no IAM to scope with).
+    Local: the emulator accepts any credentials (no IAM to scope with).
 
     ``fresh=True`` skips the cache so a run container gets the full hour.
     """
@@ -51,7 +51,7 @@ class Storage:
         self.settings = settings
         self.bucket = settings.bucket
         self._org_clients: dict[str, tuple[Credentials, object]] = {}
-        # Local: one MinIO client. AWS: no client of our own, only per-org ones (_s3).
+        # Local: one client for the emulator. AWS: no client of our own, only per-org ones (_s3).
         self.s3 = None
         if not settings.is_aws:
             self.s3 = boto3.client(

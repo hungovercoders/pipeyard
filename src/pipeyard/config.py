@@ -10,25 +10,25 @@ def _env(name: str, default: str = "") -> str:
 
 @dataclass(frozen=True)
 class Settings:
-    # "local": Docker runner, MinIO, dev token stub. "aws": Fargate runner, S3, Cognito.
+    # "local": Docker runner, AWS emulator, dev token stub. "aws": Fargate runner, S3, Cognito.
     mode: str = field(default_factory=lambda: _env("PIPEYARD_MODE", "local"))
     bucket: str = field(default_factory=lambda: _env("PIPEYARD_BUCKET", "pipeyard"))
     region: str = field(default_factory=lambda: _env("AWS_REGION", "us-east-1"))
 
     # local mode
     s3_endpoint_url: str = field(
-        default_factory=lambda: _env("PIPEYARD_S3_ENDPOINT_URL", "http://localhost:9000")
+        default_factory=lambda: _env("PIPEYARD_S3_ENDPOINT_URL", "http://localhost:4566")
     )
     s3_access_key: str = field(default_factory=lambda: _env("PIPEYARD_S3_ACCESS_KEY", "pipeyard"))
     s3_secret_key: str = field(
         default_factory=lambda: _env("PIPEYARD_S3_SECRET_KEY", "pipeyard-secret")
     )
-    # How run containers reach MinIO: they join the compose network and use its DNS name.
+    # How run containers reach the emulator: they join the compose network and use its DNS name.
     docker_network: str = field(
         default_factory=lambda: _env("PIPEYARD_DOCKER_NETWORK", "pipeyard_default")
     )
     runner_s3_endpoint_url: str = field(
-        default_factory=lambda: _env("PIPEYARD_RUNNER_S3_ENDPOINT_URL", "http://minio:9000")
+        default_factory=lambda: _env("PIPEYARD_RUNNER_S3_ENDPOINT_URL", "http://aws:5000")
     )
     dev_org_id: str = field(default_factory=lambda: _env("PIPEYARD_DEV_ORG_ID", "demo"))
     dev_secret: str = field(

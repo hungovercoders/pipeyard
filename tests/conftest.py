@@ -1,4 +1,4 @@
-"""Tests run the real app against MinIO (`task test` starts it) with a fake runner."""
+"""Tests run the real app against the AWS emulator (`task test` starts it), with a fake runner."""
 
 import io
 import json
@@ -87,7 +87,7 @@ def storage(settings) -> Storage:
         storage.ensure_bucket()
     except Exception as e:  # noqa: BLE001
         pytest.exit(
-            f"MinIO is not reachable at {settings.s3_endpoint_url} ({e}). Run `task minio`."
+            f"AWS emulator not reachable at {settings.s3_endpoint_url} ({e}). Run `task emulator`."
         )
     yield storage
     objects = storage.s3.list_objects_v2(Bucket=storage.bucket).get("Contents", [])

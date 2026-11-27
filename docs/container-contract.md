@@ -50,7 +50,7 @@ Rules checked at registration (`POST /api/pipelines`, errors come back as a list
 | `INPUT_URI` | `s3://bucket/orgs/demo/datasets/raw_events/` | Only if the pipeline declares `inputs`. Contains `run=*/` directories. |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | | Credentials for the org's prefix. No session token in local mode. |
 | `AWS_REGION`, `AWS_DEFAULT_REGION` | `eu-west-2` | |
-| `AWS_ENDPOINT_URL` | `http://minio:9000` | Local mode only. AWS SDKs pick it up automatically. |
+| `AWS_ENDPOINT_URL` | `http://aws:5000` | Local mode only. AWS SDKs pick it up automatically. |
 
 Use any AWS SDK with its default configuration: it reads all of the above from the
 environment, so the same image runs unchanged locally and in AWS.
