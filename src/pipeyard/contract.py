@@ -64,8 +64,11 @@ class Report(_Strict):
     dataset: str = Field(pattern=DATASET_NAME)
     cpu: int = 256
     memory: int = 512
-    # How long one start of the app lives. Capped like run timeouts: its credentials last an hour.
-    lifetime_seconds: int = Field(default=1800, ge=60, le=3000)
+    # The app is stopped after this long with no requests and no open WebSocket.
+    idle_timeout_seconds: int = Field(default=300, ge=60, le=3000)
+    # Hard limit on one start, in use or not. Capped like run timeouts: its credentials last
+    # an hour.
+    lifetime_seconds: int = Field(default=3000, ge=60, le=3000)
 
     @property
     def slug(self) -> str:
@@ -150,6 +153,7 @@ class ReportApp(BaseModel):
     started_at: datetime
     expires_at: datetime
     port: int
+    idle_timeout_seconds: int = 300
     handle: str | None = None  # runner's reference: container name or task ARN
     address: str | None = None  # host:port the control plane proxies to, once known
     error: str | None = None

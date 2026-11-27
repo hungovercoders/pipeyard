@@ -45,11 +45,12 @@ reports:                           # optional
     dataset: transactions          # the dataset it reads
     cpu: 256                       # same sizes as above
     memory: 512
-    lifetime_seconds: 1800         # 60-3000; how long one start of the app runs
+    idle_timeout_seconds: 300      # 60-3000; stopped after this long with nobody using it
+    lifetime_seconds: 3000         # 60-3000; the longest one start may run, used or not
 ```
 
 Only `name`, `image` and `outputs` are required, and for a report `name`, `image` and
-`dataset`. The sizes, `timeout_seconds` and `lifetime_seconds` default to the values shown.
+`dataset`. The sizes and the three time limits default to the values shown.
 
 Rules checked when you register, in the UI or with `POST /api/pipelines`. Errors come back
 as a list of `field: message` lines (HTTP 422 from the API), and nothing is saved until the
@@ -177,9 +178,13 @@ report, waits until it answers, then forwards that person's requests to it.
 
 Things to know:
 
-- **Lifetime.** The container is stopped `lifetime_seconds` after it started, however busy
-  it is, and is started afresh the next time someone presses **Start report**. One
-  instance runs per report, shared by everyone in the org who opens it.
+- **It scales to zero.** One instance runs per report, shared by everyone in the org who
+  opens it. It is started when someone opens the report and stopped once it has had no
+  requests and no open WebSocket for `idle_timeout_seconds`. Keep nothing in the
+  container that you would miss: load data at start-up, or on each request.
+- **Lifetime.** Independently, a container is stopped `lifetime_seconds` after it started
+  even if it is in use, because its credentials expire. Opening the report again starts a
+  fresh one.
 - **Read-only filesystem.** As for pipelines, only `/tmp` is writable. Many frameworks
   write to the home folder; setting `ENV HOME=/tmp` in the image takes care of it.
 - **Sign-in is pipeyard's job.** Only signed-in members of the org can reach the app, and

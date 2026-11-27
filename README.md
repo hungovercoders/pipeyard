@@ -20,9 +20,9 @@ report.
 2. **pipeyard runs the pipeline** (Docker on your laptop, Fargate in AWS) and tells it
    where to write.
 3. **Your pipeline writes Parquet** to that location and exits.
-4. **pipeyard serves the report.** When someone opens it, pipeyard starts your report
-   container, points it at the data, and passes the signed-in browser through to it. Later
-   it stops the container again.
+4. **pipeyard serves the report, and scales it to zero.** When someone opens it, pipeyard
+   starts your report container, points it at the data, and passes the signed-in browser
+   through to it. A few minutes after the last person leaves, it stops the container.
 
 That is the whole product. There is no database, no scheduler and no SDK to import. A
 pipeline container reads two environment variables and writes files to S3. A report
@@ -61,7 +61,8 @@ Now open <http://localhost:8000>. You are signed in as the org `demo`, and you w
   status go from running to succeeded.
 - **Datasets**: `transactions`, with its schema and row count.
 - **Reports**: **Transactions dashboard**, a Streamlit app running in its own container.
-  Filter the categories and the charts update live.
+  Filter the categories and the charts update live. Close the tab, and five minutes later
+  the container is gone; open the report again and it comes back.
 
 The first `task up` and `task demo` take a few minutes because they build the local AWS
 emulator (about a 200 MB download) and the Streamlit example image. After that everything
@@ -95,7 +96,8 @@ with code 0. Anything else is a failed run, and the UI tells you why.
 | `INPUT_URI` | Where its dataset lives, e.g. `s3://bucket/orgs/demo/datasets/orders/` |
 
 It serves HTTP (and WebSockets, if it likes) on that port. pipeyard starts it when someone
-opens the report and stops it after `lifetime_seconds`, 30 minutes by default.
+opens the report and stops it once nobody has used it for `idle_timeout_seconds`, 5 minutes
+by default. A report nobody is looking at costs nothing.
 
 Both get `ORG_ID` and ordinary `AWS_*` credentials, which every AWS SDK picks up by itself.
 A report's credentials are read-only.
@@ -138,8 +140,8 @@ A few choices keep it small:
 
 - **S3 is the only storage.** Pipelines are YAML objects, run records are JSON objects, data
   is Parquet. The lists in the UI are DuckDB queries over a prefix.
-- **No background worker.** A run's outcome is settled the next time anyone looks at it, and
-  a report's container is stopped by its own timer.
+- **Almost no background work.** A run's outcome is settled the next time anyone looks at
+  it. The one thing that runs on a clock is a small sweep that stops idle reports.
 - **One process.** The API and the UI are the same FastAPI app. The UI is server-rendered
   HTML with HTMX, so there is no front-end build.
 - **Multi-tenant-ready.** v0 serves one org, but `org_id` is part of every S3 key, token,
@@ -190,7 +192,7 @@ tradeoff with its fix.
 v0 is deliberately small. These are known gaps, not oversights:
 
 - Schedules: runs are triggered by hand
-- Stopping idle reports early: a report runs for its full lifetime once started
+- Reports that stay up longer than 50 minutes at a stretch (they restart when reopened)
 - Built-in SQL or chart reports: a report is always your own container
 - More than one output dataset, or more than one input, per pipeline
 - A multi-org admin UI and org onboarding

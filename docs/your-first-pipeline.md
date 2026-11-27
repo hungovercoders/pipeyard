@@ -145,7 +145,7 @@ You have data. Time to look at it.
 A report in pipeyard is also a container: a small web app. It can be built with anything
 that serves HTTP, such as Streamlit, Dash, Shiny or a hand-written Flask app. pipeyard
 starts it when someone opens the report, puts it behind the same sign-in as everything
-else, and stops it again later.
+else, and stops it again when nobody is using it.
 
 Make a sub-folder `coffee-orders/report` with two files. First the app, `app.py`:
 
@@ -227,17 +227,17 @@ reports:
     dataset: orders
 ```
 
-**Coffee dashboard** appears under Reports. Click it and press **Start report**. After a
-few seconds the dashboard appears inside the page. Pick a drink from the dropdown and watch
+**Coffee dashboard** appears under Reports. Click it. Opening a report wakes its container,
+and after a few seconds the dashboard appears inside the page. Pick a drink from the dropdown and watch
 the numbers change: that is your container, live, with pipeyard passing your browser's
 requests through to it.
 
 A few things to notice:
 
 - **You did not rerun the pipeline.** Reports read the data that is already there.
-- **It stops by itself.** The bar above the dashboard shows when. A report runs for 30
-  minutes per start by default (`lifetime_seconds`), so an abandoned dashboard costs
-  nothing. Press **Start report** again whenever you want it back.
+- **It scales to zero.** Close the tab, wait five minutes, and the container is gone
+  (`docker ps` will show you). Open the report again and it starts again. The five minutes
+  is `idle_timeout_seconds`; an abandoned dashboard costs nothing.
 - **It is private.** The app is only reachable through pipeyard, by signed-in members of
   your org. The container itself never receives your sign-in token.
 
@@ -266,8 +266,8 @@ last.
 Put the `put_object` call back and rebuild, and you are in working order again.
 
 **Break the report.** Change `image:` under `reports` to something that does not exist,
-such as `coffee-orders-report:nope`, save, and press **Start report**. Instead of a
-dashboard you get the reason it could not start. Change it back and it works again.
+such as `coffee-orders-report:nope`, save, and open the report. Instead of a dashboard you
+get the reason it could not start. Change it back and it works again.
 
 ## What you just learned
 
@@ -276,7 +276,8 @@ dashboard you get the reason it could not start. Change it back and it works aga
 - Runs append to a dataset. Failed runs explain themselves and leave nothing behind.
 - A report is a second container: any web app that listens on `$PORT` under `$BASE_PATH`
   and reads the dataset at `INPUT_URI`.
-- pipeyard starts reports on demand, keeps them behind sign-in, and stops them again.
+- pipeyard starts a report when it is opened, keeps it behind sign-in, and stops it when
+  nobody is using it.
 
 ## Where next
 

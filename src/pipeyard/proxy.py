@@ -9,7 +9,7 @@ import asyncio
 
 import httpx
 import websockets
-from fastapi import HTTPException, Request, WebSocket
+from fastapi import HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
@@ -111,8 +111,10 @@ async def forward_websocket(browser: WebSocket, address: str) -> None:
     finally:
         for task in tasks:
             task.cancel()
+        # Collect both, so that a send to a browser that has just gone is not left unhandled.
+        await asyncio.gather(*tasks, return_exceptions=True)
         await upstream.close()
         try:
             await browser.close()
-        except RuntimeError:
-            pass  # the browser side is already closed
+        except (RuntimeError, WebSocketDisconnect):
+            pass  # the browser side is already closed, e.g. the tab was shut

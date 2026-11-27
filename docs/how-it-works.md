@@ -32,7 +32,7 @@ Three things in that picture are worth a closer look.
 **pipeyard never waits on your container.** Starting a run returns immediately. The outcome
 is worked out the next time anyone reads the run: pipeyard asks the runner how the
 container ended, checks the output, and saves the verdict. That is why there is no worker
-process or queue to operate. The cost is that a run nobody looks at stays "running" in its
+process or queue to operate for runs. The cost is that a run nobody looks at stays "running" in its
 record until somebody does, although opening the datasets page counts as looking.
 
 **The run record is the source of truth.** Your container writes the data and the manifest,
@@ -81,7 +81,7 @@ sequenceDiagram
     participant A as Your report container
     participant S as S3
 
-    You->>P: Start report
+    You->>P: open the report
     P->>R: start image with PORT, BASE_PATH, INPUT_URI, read-only credentials
     R->>A: run
     loop every 2 s, while the page shows "starting"
@@ -92,13 +92,13 @@ sequenceDiagram
     P->>P: check sign-in, strip pipeyard's cookie
     P->>A: the same request
     A-->>You: the app's page, through pipeyard
-    Note over R,A: stopped after lifetime_seconds, or when you press Stop
+    Note over P,A: stopped once nobody has used it for idle_timeout_seconds
 ```
 
 A report is a web app in a container, and pipeyard is a reverse proxy in front of it.
 
-**Started on demand.** Nothing runs until someone presses **Start report**. There is one
-instance per report, shared by everyone in the org.
+**Started on demand.** Nothing runs until someone opens the report, which wakes it. There
+is one instance per report, shared by everyone in the org.
 
 **Reached only through pipeyard.** The browser talks to
 `/apps/{pipeline}/{report}/...` on pipeyard, which checks the sign-in, removes its own
@@ -107,10 +107,17 @@ container. WebSockets are forwarded the same way, which is what makes Streamlit-
 work. Locally the container is reached on a loopback port; in AWS on the task's private
 address, which only pipeyard's security group may connect to.
 
-**Stopped by a timer.** The same mechanism that enforces a pipeline's timeout stops a
-report after `lifetime_seconds` (30 minutes by default). pipeyard does not track whether
-anyone is still looking, so an app in use is stopped too; press **Start report** again.
-The cap of 50 minutes exists because the app's S3 credentials last an hour.
+**Scaled to zero when idle.** pipeyard notes the time of every request it forwards and
+counts the WebSockets it has open to each app. Every 15 seconds it stops any app that has
+no open WebSocket and has had no request for `idle_timeout_seconds` (5 minutes by default).
+An open browser tab on a Streamlit-style app holds a WebSocket, so a dashboard someone is
+looking at is never stopped for being quiet.
+
+This is the one piece of pipeyard that runs on a clock. The usage notes are kept in
+memory, so if pipeyard restarts it treats each running app as used at the moment it next
+sees it. As a backstop, the mechanism that enforces a pipeline's timeout also stops a
+report `lifetime_seconds` after it started (50 minutes at most), in use or not, because
+the app's S3 credentials last an hour.
 
 **Read-only.** A report's credentials can read its org's prefix and nothing else, and
 cannot write at all.

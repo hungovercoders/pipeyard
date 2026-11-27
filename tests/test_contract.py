@@ -66,6 +66,10 @@ def test_defaults():
             "reports.0: memory 4096 is not valid for cpu 256",
         ),
         (
+            VALID + "reports: [{name: r, image: i, dataset: d, idle_timeout_seconds: 5}]",
+            "reports.0.idle_timeout_seconds: Input should be greater than or equal to 60",
+        ),
+        (
             VALID + "reports: [{name: r, image: i, dataset: d, lifetime_seconds: 99999}]",
             "reports.0.lifetime_seconds: Input should be less than or equal to 3000",
         ),

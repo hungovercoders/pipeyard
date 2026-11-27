@@ -1,12 +1,14 @@
 """Reports are web apps in containers: started on demand, reached only through the proxy."""
 
 import json
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from conftest import register
 from fastapi.testclient import TestClient
 
+from pipeyard.app import create_app
 from pipeyard.auth import Auth
 from pipeyard.runner import TIMEOUT_EXIT_CODE, RunState
 
@@ -35,7 +37,7 @@ def test_report_starts_on_demand_and_is_served_through_the_proxy(
     started = runner.started[-1]
     job, env = started["job"], started["env"]
     assert (job.image, job.cpu, job.memory, job.timeout_seconds) == (
-        "pipeyard-example-fake-transactions-report:latest", 512, 1024, 1800,
+        "pipeyard-example-fake-transactions-report:latest", 512, 1024, 3000,
     )  # fmt: skip
     assert job.port == int(env["PORT"])
     assert env["BASE_PATH"] == APP
@@ -188,19 +190,107 @@ def test_unknown_report_is_404(client, example_yaml):
 def test_ui_flow(client, runner, example_yaml):
     register(client, example_yaml)
     page = "/pipelines/fake-transactions/reports/transactions-dashboard"
-
-    stopped = client.get(page).text
-    assert "Start report" in stopped and "<iframe" not in stopped
+    assert "stopped" in client.get("/pipelines/fake-transactions").text  # listing does not wake it
 
     runner.app_ready = False
-    starting = client.post(f"{page}/start").text
+    starting = client.get(page).text  # opening the report wakes it up
     assert "starting" in starting and 'hx-trigger="every 2s"' in starting
+    assert "<iframe" not in starting and len(runner.apps) == 1
     assert "starting" in client.get("/pipelines/fake-transactions").text
 
     runner.app_ready = True
     running = client.get(f"{page}/state").text
     assert f'<iframe class="card report-frame" src="{APP}/"' in running
     assert "hx-trigger" not in running  # no polling, or the iframe would be reloaded
+    assert "after 5 min unused" in running
     assert "Stop" in running and "Open in new tab" in running
 
     assert "Start report" in client.post(f"{page}/stop").text
+    assert runner.apps == {}
+
+
+def test_opening_a_crashed_report_does_not_restart_it(started, runner):
+    (instance,) = runner.apps
+    runner.states[instance] = RunState(False, 1, "boom")
+    page = started.get("/pipelines/fake-transactions/reports/transactions-dashboard").text
+    assert "stopped with an error" in page and "Start report" in page
+    assert len(runner.started) == 1  # shown, not silently retried on every reload
+
+
+# --- scale to zero ---------------------------------------------------------------------
+
+
+def test_idle_app_is_stopped(started, runner, app):
+    sweep = app.state.sweep_idle
+    assert sweep() == []  # just used
+    assert sweep(time.time() + 299) == []
+    (stopped,) = sweep(time.time() + 301)  # default idle timeout is 300 s
+    assert stopped[1:] == ("fake-transactions", "transactions-dashboard")
+    assert runner.apps == {}  # the container is gone
+    status = started.get(REPORT).json()
+    assert (status["status"], status["error"]) == ("stopped", None)
+    assert sweep(time.time() + 9999) == []  # nothing left to stop
+
+
+def test_requests_keep_an_app_alive(started, runner, app, monkeypatch):
+    sweep = app.state.sweep_idle
+    clock = [time.time()]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    for _ in range(5):  # used every 4 minutes for 20 minutes
+        clock[0] += 240
+        assert started.get(f"{APP}/").status_code == 200
+        assert sweep() == []
+    clock[0] += 301  # then left alone
+    assert len(sweep()) == 1 and runner.apps == {}
+
+
+def test_an_open_websocket_keeps_an_app_alive(started, runner, app, settings, org):
+    sweep = app.state.sweep_idle
+    token = Auth(settings).dev_token(org)
+    with TestClient(started.app).websocket_connect(
+        f"{APP}/_stcore/stream", headers={"Cookie": f"pipeyard_token={token}"}
+    ) as ws:
+        ws.send_text("hi")
+        ws.receive_text()
+        assert sweep(time.time() + 5000) == []  # the tab is open: in use, however quiet
+    assert sweep(time.time() + 299) == []  # closed just now: the idle clock starts here
+    assert len(sweep(time.time() + 301)) == 1
+
+
+def test_idle_timeout_comes_from_pipeline_yaml(client, runner, app, example_yaml):
+    register(
+        client, example_yaml.replace("    cpu: 512", "    idle_timeout_seconds: 60\n    cpu: 512")
+    )
+    client.post(f"{REPORT}/start")
+    assert client.get(REPORT).json()["idle_timeout_seconds"] == 60
+    assert app.state.sweep_idle(time.time() + 59) == []
+    assert len(app.state.sweep_idle(time.time() + 61)) == 1
+
+
+def test_after_a_restart_the_idle_clock_starts_again(started, runner, settings):
+    """Usage is kept in memory. A new process must not stop apps it knows nothing about,
+    nor forget them: it counts them as used from when it first sees them."""
+    restarted = create_app(settings, runner)
+    client = TestClient(restarted, follow_redirects=False)
+    client.headers.update(started.headers)
+    sweep = restarted.state.sweep_idle
+    assert sweep(time.time() + 9999) == []  # not seen yet: left alone
+    assert client.get(REPORT).json()["status"] == "running"  # seen now
+    assert sweep(time.time() + 299) == []
+    assert len(sweep(time.time() + 301)) == 1 and runner.apps == {}
+
+
+def test_a_waking_app_is_not_stopped_while_someone_waits(
+    client, runner, app, example_yaml, monkeypatch
+):
+    register(client, example_yaml)
+    runner.app_ready = False  # a slow start
+    client.post(f"{REPORT}/start")
+    clock = [time.time()]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    for _ in range(4):  # the report page keeps polling, 200 s apart here
+        clock[0] += 200
+        assert client.get(REPORT).json()["status"] == "starting"
+        assert app.state.sweep_idle() == []
+    clock[0] += 301  # the person gave up and closed the page
+    assert len(app.state.sweep_idle()) == 1 and runner.apps == {}

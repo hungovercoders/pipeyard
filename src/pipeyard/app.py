@@ -4,8 +4,11 @@ Every handler gets ``org_id`` from the ``current_org`` dependency (a verified to
 nowhere else. No route takes an org in its path, query or body.
 """
 
+import asyncio
+import logging
 import re
 import time
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path as FsPath
 from typing import Annotated
@@ -44,6 +47,8 @@ reports:
 """
 
 FARGATE_REPORT_PORT = 8080
+SWEEP_SECONDS = 15  # how often idle report apps are looked for
+log = logging.getLogger("pipeyard")
 ROUTE_CACHE_SECONDS = 15
 
 
@@ -70,7 +75,24 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
     if not settings.is_aws:
         storage.ensure_bucket()
 
-    app = FastAPI(title="pipeyard", docs_url=None, redoc_url=None, openapi_url=None)
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        async def sweeper() -> None:
+            while True:
+                await asyncio.sleep(SWEEP_SECONDS)
+                try:
+                    await run_in_threadpool(sweep_idle)
+                except Exception:  # noqa: BLE001 - keep sweeping whatever one pass hits
+                    log.exception("idle sweep failed")
+
+        task = asyncio.create_task(sweeper())
+        yield
+        task.cancel()
+        await http.aclose()
+
+    app = FastAPI(
+        title="pipeyard", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
+    )
     app.state.storage = storage
     # For the report proxy. trust_env=False: report apps are on private addresses, so
     # never send their traffic through an outbound proxy from the environment.
@@ -278,6 +300,28 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
 
     recent_ports: dict[int, float] = {}  # local ports handed out in the last minute
     routes: dict[tuple[str, str, str], tuple[float, str]] = {}  # proxy targets, briefly cached
+    # Scale to zero: when each live app was last used. In memory, so after a restart an app
+    # counts as just used, and its lifetime is the backstop if nobody ever comes back.
+    usage: dict[tuple[str, str, str], dict] = {}
+
+    def touch(app_: ReportApp) -> dict:
+        key = (app_.org_id, app_.pipeline, app_.slug)
+        entry = usage.setdefault(key, {"sockets": 0})
+        entry["last"], entry["idle"] = time.time(), app_.idle_timeout_seconds
+        return entry
+
+    def sweep_idle(now: float | None = None) -> list[tuple[str, str, str]]:
+        """Stop every report app nobody has used for its idle timeout. Returns what it stopped."""
+        now = now or time.time()
+        idle = [k for k, u in usage.items() if not u["sockets"] and now - u["last"] > u["idle"]]
+        for key in idle:
+            usage.pop(key, None)
+            app_ = storage.get_report_app(*key)
+            if app_ is not None and app_.status != "stopped":
+                stopped(app_)
+        return idle
+
+    app.state.sweep_idle = sweep_idle
 
     def get_report(org_id: str, name: str, slug: str) -> tuple[PipelineSpec, Report]:
         spec = get_pipeline(org_id, name)
@@ -306,6 +350,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         app_.status, app_.error = "stopped", error
         storage.put_report_app(app_)
         routes.pop((app_.org_id, app_.pipeline, app_.slug), None)
+        usage.pop((app_.org_id, app_.pipeline, app_.slug), None)
         if app_.handle:
             runner.stop(app_.handle)
         return app_
@@ -325,7 +370,10 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             return stopped(app_, error)
         if datetime.now(UTC) >= app_.expires_at:
             return stopped(app_)
+        if (app_.org_id, app_.pipeline, app_.slug) not in usage:
+            touch(app_)  # this process has not seen it before (it restarted): count from now
         if app_.status == "starting":
+            touch(app_)  # someone is waiting for it
             address = app_.address or runner.address(app_.handle, app_.port)
             ready_path = base_path(app_.pipeline, app_.slug) + "/"
             if address and _answers(address, ready_path):
@@ -352,6 +400,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             started_at=now,
             expires_at=now + timedelta(seconds=report.lifetime_seconds),
             port=0,
+            idle_timeout_seconds=report.idle_timeout_seconds,
         )
         try:
             app_.port = pick_port()
@@ -373,6 +422,8 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         except Exception as e:  # noqa: BLE001 - any start failure is shown on the report page
             app_.status, app_.error = "stopped", f"could not start: {e}"
         storage.put_report_app(app_)
+        if app_.status != "stopped":
+            touch(app_)
         return app_
 
     def stop_report(org_id: str, pipeline: str, slug: str) -> ReportApp | None:
@@ -394,6 +445,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             "url": base_path(spec.name, report.slug) + "/" if live else None,
             "started_at": app_.started_at if live else None,
             "expires_at": app_.expires_at if live else None,
+            "idle_timeout_seconds": report.idle_timeout_seconds,
             "error": app_.error if app_ else None,
         }
 
@@ -409,6 +461,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             routes.pop(key, None)
             raise HTTPException(409, "this report is not running; start it from its page")
         routes[key] = (time.time() + ROUTE_CACHE_SECONDS, app_.address)
+        touch(app_)
         return app_.address
 
     @app.api_route(
@@ -417,6 +470,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
     )
     async def proxy_http(request: Request, org_id: Org, name: PipelineName, slug: Slug, path: str):
         address = await run_in_threadpool(proxy_target, org_id, name, slug)
+        usage[(org_id, name, slug)]["last"] = time.time()  # in use
         try:
             return await proxy.forward_http(http, request, address)
         except HTTPException:
@@ -437,7 +491,13 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         except HTTPException:
             await websocket.close(code=1008)
             return
-        await proxy.forward_websocket(websocket, address)
+        entry = usage[(org_id, name, slug)]
+        entry["sockets"] += 1  # an open socket means someone has the report open
+        try:
+            await proxy.forward_websocket(websocket, address)
+        finally:
+            entry["sockets"] -= 1
+            entry["last"] = time.time()
 
     # --- API --------------------------------------------------------------------------
 
@@ -606,6 +666,10 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
     def ui_report(request: Request, org_id: Org, name: PipelineName, slug: Slug):
         spec, report = get_report(org_id, name, slug)
         app_ = report_app(org_id, name, slug)
+        if app_ is None or (app_.status == "stopped" and not app_.error):
+            # Opening a report wakes it up. One that stopped with an error waits for the
+            # button instead, so reloading the page does not restart a crashing app forever.
+            app_ = start_report(org_id, spec, report)
         return report_page(request, org_id, "report.html", spec, report, app_)
 
     @app.get("/pipelines/{name}/reports/{slug}/state", response_class=HTMLResponse)

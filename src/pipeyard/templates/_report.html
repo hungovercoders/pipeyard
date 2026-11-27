@@ -5,7 +5,7 @@
   {% if report.status == "running" %}
   <div class="card facts report-bar">
     <div><dt>App</dt><dd><span class="status running">running</span></dd></div>
-    <div><dt>Stops at (UTC)</dt><dd>{{ report.expires_at.strftime("%H:%M") }}</dd></div>
+    <div><dt>Stops</dt><dd>after {{ (report.idle_timeout_seconds / 60) | round(1) | string | replace(".0", "") }} min unused, or at {{ report.expires_at.strftime("%H:%M") }} UTC</dd></div>
     <div class="actions">
       <a class="button quiet" href="{{ report.url }}" target="_blank" rel="noopener">Open in new tab</a>
       <button class="quiet" hx-post="{{ action }}/stop" hx-target="#report-state" hx-swap="outerHTML">Stop</button>
@@ -19,7 +19,7 @@
   {% if report.error %}<div class="card errors" role="alert"><strong>The report stopped with an error</strong>
     <div class="err mono">{{ report.error }}</div></div>{% endif %}
   <div class="card empty">
-    <p>This report is a web app that runs on demand. It is not running at the moment.</p>
+    <p>This report is a web app that runs only while it is being used. It is stopped at the moment.</p>
     <button hx-post="{{ action }}/start" hx-target="#report-state" hx-swap="outerHTML" hx-disabled-elt="this">Start report</button>
   </div>
   {% endif %}

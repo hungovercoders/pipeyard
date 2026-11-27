@@ -107,10 +107,13 @@ a valid manifest plus Parquet means success. In the rare case that a container w
 complete, valid manifest and *then* exited non-zero, that run would be recorded as
 succeeded. A background poller would close the gap.
 
-**Reports run for their whole lifetime.** A started report is a Fargate task that runs for
-`lifetime_seconds` (30 minutes by default, 50 at most) whether or not anyone is looking,
-then stops. There is no idle detection yet. The traffic between pipeyard and a report task
-stays inside the VPC but is plain HTTP.
+**Reports scale to zero, with two rough edges.** A report is a Fargate task that exists
+only while it is in use: pipeyard stops it after `idle_timeout_seconds` (5 minutes by
+default) without a request or an open WebSocket, so an unused report costs nothing. The
+rough edges: waking one takes as long as Fargate takes to start a task, typically under a
+minute; and a report in continuous use is still restarted every 50 minutes, because its
+credentials expire. The traffic between pipeyard and a report task stays inside the VPC
+but is plain HTTP.
 
 **One task definition revision per run or report start.** Harmless, but they accumulate in
 ECS.

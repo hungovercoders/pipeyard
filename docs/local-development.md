@@ -58,7 +58,7 @@ When you trigger a run, pipeyard calls `docker run` with the image from your
 [the contract](container-contract.md). Images come from your local Docker, so
 `docker build` is all it takes to publish a change.
 
-A report is started the same way when you press **Start report**, with one difference: it
+A report is started the same way when you open it, with one difference: it
 is given a free port from the range 8600 to 8619 to listen on, which the emulator container
 publishes on your machine's loopback. pipeyard proxies to it there. That allows 20 reports
 at once locally. You can also open `http://localhost:8600` directly to see an app without
@@ -125,6 +125,9 @@ limits anonymous pulls. Use a mirror:
 **A report shows a blank page or missing styles.** The app is not serving under
 `$BASE_PATH`, so its links point at pipeyard instead of at itself. See the framework
 settings in [the contract](container-contract.md#report-containers).
+
+**A report stopped while I was away.** That is scale to zero: it had been unused for
+`idle_timeout_seconds` (5 minutes by default). Open it again and it restarts.
 
 **A report says all local report ports are in use.** Twenty are available. Stop a report
 you are not using.
