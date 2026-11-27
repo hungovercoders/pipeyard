@@ -111,7 +111,10 @@ A non-zero exit, a missing or invalid manifest, or no Parquet means a failed run
 The full contract, including the manifest format and every failure message, is in
 [docs/container-contract.md](docs/container-contract.md).
 
-Register with `POST /api/pipelines` (body: the YAML). The API:
+Register it in the UI with **Register pipeline** on the pipelines page (paste the YAML;
+validation errors are listed and nothing is saved until it is valid), or change an existing
+one with **Edit YAML** on its page. From scripts, use `POST /api/pipelines` (body: the YAML).
+The API:
 
 | Method and path | |
 |---|---|
@@ -226,5 +229,4 @@ Runtime dependencies: FastAPI, uvicorn, Jinja2, DuckDB, pydantic, PyYAML, boto3,
 - Egress controls for run containers
 - A catalogue (DuckLake, S3 Tables); datasets are plain Hive-partitioned Parquet
 - More than one output dataset per pipeline, and more than one input
-- Registering pipelines from the UI (use the API or `scripts/demo.py`)
 - Run log viewing in the UI for AWS runs (use CloudWatch Logs)

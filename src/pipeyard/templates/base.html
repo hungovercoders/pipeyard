@@ -54,8 +54,16 @@
     .status.running::before { animation: pulse 1s ease-in-out infinite alternate; }
     @keyframes pulse { to { opacity: 0.25; } }
     .err { color: var(--muted); font-size: 12.5px; white-space: pre-wrap; margin-top: 4px; max-width: 520px; }
-    button { font: inherit; font-weight: 500; padding: 7px 14px; border-radius: 7px; border: 0;
-             background: var(--accent); color: #fff; cursor: pointer; }
+    button, a.button { font: inherit; font-weight: 500; padding: 7px 14px; border-radius: 7px;
+             border: 1px solid var(--accent); background: var(--accent); color: #fff;
+             cursor: pointer; text-decoration: none; white-space: nowrap; display: inline-block; }
+    a.button.quiet { background: transparent; color: var(--text); border-color: var(--border); }
+    .actions { display: flex; gap: 8px; align-items: center; }
+    textarea { width: 100%; min-height: 380px; padding: 14px; border: 0; border-radius: 10px;
+               background: var(--surface); color: var(--text); resize: vertical; tab-size: 2;
+               font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .errors { border-left: 3px solid var(--bad); padding: 12px 14px; margin-bottom: 16px; }
+    .errors ul { margin: 6px 0 0; padding-left: 18px; }
     button:disabled { opacity: 0.6; cursor: default; }
     .row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
     .facts { display: flex; flex-wrap: wrap; gap: 6px 28px; padding: 14px; font-size: 14px; }

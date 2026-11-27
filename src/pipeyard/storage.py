@@ -108,8 +108,11 @@ class Storage:
     def put_pipeline(self, org_id: str, name: str, yaml_text: str) -> None:
         self._put(org_id, contract.pipeline_key(org_id, name), yaml_text, "application/yaml")
 
+    def get_pipeline_text(self, org_id: str, name: str) -> str | None:
+        return self._get(org_id, contract.pipeline_key(org_id, name))
+
     def get_pipeline(self, org_id: str, name: str) -> contract.PipelineSpec | None:
-        text = self._get(org_id, contract.pipeline_key(org_id, name))
+        text = self.get_pipeline_text(org_id, name)
         return contract.parse_pipeline(text) if text is not None else None
 
     def list_pipelines(self, org_id: str) -> list[contract.PipelineSpec]:

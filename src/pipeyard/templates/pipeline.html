@@ -4,8 +4,11 @@
 <div class="crumb"><a href="/pipelines">Pipelines</a> /</div>
 <div class="row">
   <div><h1>{{ spec.name }}</h1><p class="sub mono">{{ spec.image }}</p></div>
-  <button hx-post="/pipelines/{{ spec.name }}/runs" hx-target="#runs" hx-swap="outerHTML"
-          hx-disabled-elt="this">Trigger run</button>
+  <div class="actions">
+    <a class="button quiet" href="/register?pipeline={{ spec.name }}">Edit YAML</a>
+    <button hx-post="/pipelines/{{ spec.name }}/runs" hx-target="#runs" hx-swap="outerHTML"
+            hx-disabled-elt="this">Trigger run</button>
+  </div>
 </div>
 <dl class="card facts">
   <div><dt>Output dataset</dt><dd class="mono">{{ spec.output_dataset }}</dd></div>

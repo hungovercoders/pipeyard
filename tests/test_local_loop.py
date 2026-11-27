@@ -113,3 +113,39 @@ def test_local_login_stub(client_for):
     assert login.headers["location"] == "/datasets" and "pipeyard_token" in login.cookies
     token = anonymous.post("/dev/token").json()
     assert token["org_id"] == "demo"
+
+
+def test_register_form(client, example_yaml):
+    from urllib.parse import urlencode
+
+    def post(text):
+        return client.post("/register", content=urlencode({"yaml": text}))
+
+    blank = client.get("/register")
+    assert "Register pipeline" in blank.text and "name: my-pipeline" in blank.text
+    assert 'href="/register"' in client.get("/pipelines").text
+
+    bad = post("name: Bad Name\nimage: i\noutputs: []")
+    assert bad.status_code == 422
+    assert "name: String should match" in bad.text and "outputs: List should have" in bad.text
+    assert "name: Bad Name" in bad.text  # what was typed is kept
+    assert client.get("/api/pipelines").json() == []
+
+    saved = post(example_yaml.replace("\n", "\r\n"))  # browsers send CRLF
+    assert saved.status_code == 303 and saved.headers["location"] == "/pipelines/fake-transactions"
+    assert client.get("/api/pipelines/fake-transactions").json()["cpu"] == 256
+
+    edit = client.get("/register?pipeline=fake-transactions")
+    assert "Edit fake-transactions" in edit.text and "Daily volume" in edit.text
+    assert "\r" not in edit.text
+    post(example_yaml.replace("cpu: 256", "cpu: 512").replace("memory: 512", "memory: 1024"))
+    assert client.get("/api/pipelines/fake-transactions").json()["cpu"] == 512
+    assert len(client.get("/api/pipelines").json()) == 1
+
+
+def test_register_form_cannot_show_another_orgs_yaml(client_for, example_yaml):
+    from urllib.parse import urlencode
+
+    client_for("org-form-a").post("/register", content=urlencode({"yaml": example_yaml}))
+    other = client_for("org-form-b").get("/register?pipeline=fake-transactions")
+    assert "Daily volume" not in other.text and "name: my-pipeline" in other.text

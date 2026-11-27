@@ -1,8 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Pipelines · pipeyard{% endblock %}
 {% block main %}
-<h1>Pipelines</h1>
-<p class="sub">Containers registered for this org. Each run lands a dataset as Parquet.</p>
+<div class="row">
+  <div><h1>Pipelines</h1>
+  <p class="sub">Containers registered for this org. Each run lands a dataset as Parquet.</p></div>
+  <a class="button" href="/register">Register pipeline</a>
+</div>
 <div class="card scroll">
   {% if pipelines %}
   <table>
@@ -20,8 +23,8 @@
     {% endfor %}
   </table>
   {% else %}
-  <div class="empty">No pipelines yet. Register one with <code>task demo</code> or
-    <code>POST /api/pipelines</code> (body: your <code>pipeline.yaml</code>).</div>
+  <div class="empty">No pipelines yet. <a href="/register">Register one</a>, or run
+    <code>task demo</code> for the example.</div>
   {% endif %}
 </div>
 {% endblock %}

@@ -4,6 +4,7 @@ Every handler gets ``org_id`` from the ``current_org`` dependency (a verified to
 nowhere else. No route takes an org in its path, query or body.
 """
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path as FsPath
 from typing import Annotated
@@ -24,6 +25,21 @@ from .storage import Storage, org_credentials
 PipelineName = Annotated[str, Path(pattern=contract.PIPELINE_NAME)]
 RunId = Annotated[str, Path(pattern=contract.RUN_ID_RE.pattern)]
 Slug = Annotated[str, Path(pattern=r"^[a-z0-9-]{1,80}$")]
+
+STARTER_YAML = """\
+name: my-pipeline
+image: my-image:latest
+cpu: 256
+memory: 512
+timeout_seconds: 600
+outputs:
+  - dataset: my_dataset
+reports:
+  - name: Row count
+    dataset: my_dataset
+    sql: |
+      select count(*) as row_count from {{dataset}}
+"""
 
 TEMPORAL = ("DATE", "TIMESTAMP")
 NUMERIC = ("INT", "DECIMAL", "DOUBLE", "FLOAT", "HUGEINT")
@@ -319,8 +335,10 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
 
     # --- UI ---------------------------------------------------------------------------
 
-    def page(request: Request, template: str, org_id: str, **context):
-        return templates.TemplateResponse(request, template, {"org_id": org_id, **context})
+    def page(request: Request, template: str, org_id: str, status_code: int = 200, **context):
+        return templates.TemplateResponse(
+            request, template, {"org_id": org_id, **context}, status_code=status_code
+        )
 
     @app.get("/", response_class=HTMLResponse)
     def home():
@@ -339,6 +357,42 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             pipelines=storage.list_pipelines(org_id),
             latest=latest,
         )
+
+    @app.get("/register", response_class=HTMLResponse)
+    def ui_register_form(request: Request, org_id: Org, pipeline: str | None = None):
+        """Blank form, or with ?pipeline=name, that pipeline's YAML ready to edit."""
+        text = None
+        if pipeline and re.fullmatch(contract.PIPELINE_NAME, pipeline):
+            text = storage.get_pipeline_text(org_id, pipeline)
+        return page(
+            request,
+            "register.html",
+            org_id,
+            nav="pipelines",
+            yaml_text=text or STARTER_YAML,
+            editing=pipeline if text else None,
+            errors=[],
+        )
+
+    @app.post("/register", response_class=HTMLResponse)
+    def ui_register(request: Request, org_id: Org, body: Annotated[bytes, Body()]):
+        # Browsers send textarea line breaks as CRLF.
+        text = parse_qs(body.decode(errors="replace")).get("yaml", [""])[0].replace("\r\n", "\n")
+        try:
+            spec = contract.parse_pipeline(text)
+        except ContractError as e:
+            return page(
+                request,
+                "register.html",
+                org_id,
+                nav="pipelines",
+                yaml_text=text,
+                editing=None,
+                errors=e.errors,
+                status_code=422,
+            )
+        storage.put_pipeline(org_id, spec.name, text)
+        return RedirectResponse(f"/pipelines/{spec.name}", status_code=303)
 
     @app.get("/pipelines/{name}", response_class=HTMLResponse)
     def ui_pipeline(request: Request, org_id: Org, name: PipelineName):
