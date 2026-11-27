@@ -31,8 +31,22 @@
     {% endfor %}
   </table>
 </div>
+{% if c.rules %}
+<div class="card scroll" style="margin-top: 12px">
+  <table>
+    <tr><th>Quality rule</th><th>Requires</th><th>If not met</th></tr>
+    {% for r in c.rules %}
+    <tr>
+      <td class="mono wrap">{{ r.rule }}</td>
+      <td class="wrap">{{ r.requires }}</td>
+      <td class="wrap">{% if not r.checked %}<span class="sub">not checked: {{ r.note }}</span>{% elif r.severity == "error" %}the run fails{% else %}a warning on the run{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
 <p class="sub" style="margin-top: 10px">Each run is checked against this when it finishes: every column must be present with a
-  matching type, and required columns must have no nulls. A run that does not conform fails and adds nothing.</p>
+  matching type, required columns must have no nulls, and the quality rules must hold. A run that does not conform fails and adds nothing.</p>
 {% else %}
 <div class="card empty">
   <p>No data contract. Runs are accepted whatever columns they contain.</p>
@@ -55,7 +69,9 @@
       <td class="mono">{{ r.run_id }}</td>
       <td><a href="/pipelines/{{ r.pipeline }}">{{ r.pipeline }}</a></td>
       <td class="wrap"><span class="status {{ r.status }}">{{ r.status }}</span>
-        {% if r.error %}<div class="err mono">{{ r.error }}</div>{% endif %}</td>
+        {% if r.error %}<div class="err mono">{{ r.error }}</div>{% endif %}
+        {% if r.warnings %}<div class="err warn mono">warnings:
+{{ r.warnings }}</div>{% endif %}</td>
       <td>{{ r.started_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
       <td class="num">{{ "{:,}".format(r.row_count) if r.row_count is not none else "–" }}</td>
     </tr>

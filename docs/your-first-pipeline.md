@@ -292,6 +292,10 @@ data contract 'orders' version 1.0.0 is not met:
 and the dashboard, which would have crashed on the missing column, carries on showing the
 good data. Change `cost` back to `price` and rebuild.
 
+Contracts can also make promises about values, not only columns: "no price above 20",
+"every drink is one we sell", "at least one row". The draft you saved already contains the
+last of those. [Data contracts](data-contracts.md#quality-rules) lists what you can ask for.
+
 ## What you just learned
 
 - A pipeline is a container plus a `pipeline.yaml`. The container's whole job is: write
