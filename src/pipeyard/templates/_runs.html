@@ -1,0 +1,19 @@
+<div id="runs" class="card scroll"
+     {% if runs | selectattr("status", "equalto", "running") | list %}
+     hx-get="/pipelines/{{ spec.name }}/runs" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  {% if runs %}
+  <table>
+    <tr><th>Run</th><th>Status</th><th>Started (UTC)</th><th class="num">Duration</th><th class="num">Rows</th></tr>
+    {% for r in runs %}
+    <tr>
+      <td class="mono">{{ r.run_id }}</td>
+      <td class="wrap"><span class="status {{ r.status }}">{{ r.status }}</span>
+        {% if r.error %}<div class="err mono">{{ r.error }}</div>{% endif %}</td>
+      <td>{{ r.started_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+      <td class="num">{% if r.finished_at %}{{ (r.finished_at - r.started_at).total_seconds() | round(1) }} s{% else %}–{% endif %}</td>
+      <td class="num">{{ "{:,}".format(r.row_count) if r.row_count is not none else "–" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty">No runs yet. Trigger one above.</div>{% endif %}
+</div>

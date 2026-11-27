@@ -1,0 +1,121 @@
+version: "3"
+
+vars:
+  EXAMPLE_IMAGE: pipeyard-example-fake-transactions
+  STACK: pipeyard
+  # Override to dodge Docker Hub rate limits, e.g. public.ecr.aws/docker/library/python:3.12-slim
+  BASE_IMAGE: '{{.BASE_IMAGE | default "python:3.12-slim"}}'
+
+tasks:
+  default:
+    cmds: [task --list]
+    silent: true
+
+  setup:
+    desc: Install Python dependencies
+    cmds: [uv sync]
+
+  emulator:
+    desc: Build and start the AWS Emulator (used for local S3) in the background
+    env:
+      UID_GID:
+        sh: echo "$(id -u):$(id -g)"
+    cmds:
+      - mkdir -p .emulator
+      - docker compose up -d --wait aws
+
+  up:
+    desc: Start the AWS Emulator and the control plane on http://localhost:8000
+    deps: [setup, emulator]
+    cmds:
+      - uv run uvicorn --factory pipeyard.app:create_app --host 127.0.0.1 --port 8000
+
+  down:
+    desc: Stop the AWS Emulator (its data is in memory, so this clears it)
+    cmds: [docker compose down]
+
+  build-example:
+    desc: Build the example pipeline image locally
+    cmds:
+      - docker build --build-arg BASE_IMAGE={{.BASE_IMAGE}} -t {{.EXAMPLE_IMAGE}}:latest examples/pipelines/fake-transactions
+
+  demo:
+    desc: Register the example pipeline, trigger a run and print its report (needs `task up`)
+    deps: [build-example]
+    cmds: [uv run python scripts/demo.py]
+
+  lint:
+    desc: Ruff lint and format check
+    cmds:
+      - uv run ruff check .
+      - uv run ruff format --check .
+
+  fmt:
+    desc: Auto-format and fix lint
+    cmds:
+      - uv run ruff format .
+      - uv run ruff check --fix .
+
+  test:
+    desc: Run the tests (they use the AWS Emulator as their S3)
+    deps: [emulator]
+    cmds: ["uv run pytest {{.CLI_ARGS}}"]
+
+  # --- AWS ---------------------------------------------------------------------------
+
+  synth:
+    desc: Synthesize the CloudFormation template
+    cmds: ["cdk synth {{.CLI_ARGS}}"]
+
+  bootstrap:
+    desc: One-time CDK bootstrap of the account/region
+    cmds: [cdk bootstrap]
+
+  deploy:
+    desc: Deploy the stack (pass CDK args after --, e.g. -c org_id=acme)
+    cmds: ["cdk deploy --require-approval never {{.CLI_ARGS}}"]
+
+  destroy:
+    desc: Tear the stack down (the bucket and its data are retained)
+    cmds: [cdk destroy]
+
+  outputs:
+    desc: Print the stack outputs
+    cmds:
+      - aws cloudformation describe-stacks --stack-name {{.STACK}} --query "Stacks[0].Outputs[].[OutputKey,OutputValue]" --output table
+
+  push-example:
+    desc: Build the example image and push it to the stack's ECR repo
+    vars:
+      REPO:
+        sh: aws cloudformation describe-stacks --stack-name {{.STACK}} --query "Stacks[0].Outputs[?OutputKey=='EcrRepositoryUri'].OutputValue" --output text
+    cmds:
+      - aws ecr get-login-password | docker login --username AWS --password-stdin {{splitList "/" .REPO | first}}
+      - docker build --platform linux/amd64 --build-arg BASE_IMAGE={{.BASE_IMAGE}} -t {{.REPO}}:fake-transactions examples/pipelines/fake-transactions
+      - docker push {{.REPO}}:fake-transactions
+
+  create-user:
+    desc: "Create a Cognito user in the stack's org: task create-user EMAIL=you@example.com PASSWORD=..."
+    requires:
+      vars: [EMAIL, PASSWORD]
+    vars:
+      POOL:
+        sh: aws cloudformation describe-stacks --stack-name {{.STACK}} --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text
+      ORG:
+        sh: aws cloudformation describe-stacks --stack-name {{.STACK}} --query "Stacks[0].Outputs[?OutputKey=='OrgId'].OutputValue" --output text
+    cmds:
+      - aws cognito-idp admin-create-user --user-pool-id {{.POOL}} --username {{.EMAIL}} --message-action SUPPRESS --user-attributes Name=email,Value={{.EMAIL}} Name=email_verified,Value=true Name=custom:org_id,Value={{.ORG}} > /dev/null
+      - aws cognito-idp admin-set-user-password --user-pool-id {{.POOL}} --username {{.EMAIL}} --password '{{.PASSWORD}}' --permanent
+    silent: true
+
+  demo-aws:
+    desc: Same demo against the deployed stack (needs PIPEYARD_USERNAME and PIPEYARD_PASSWORD)
+    vars:
+      URL:
+        sh: aws cloudformation describe-stacks --stack-name {{.STACK}} --query "Stacks[0].Outputs[?OutputKey=='Url'].OutputValue" --output text
+      CLIENT:
+        sh: aws cloudformation describe-stacks --stack-name {{.STACK}} --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text
+      REPO:
+        sh: aws cloudformation describe-stacks --stack-name {{.STACK}} --query "Stacks[0].Outputs[?OutputKey=='EcrRepositoryUri'].OutputValue" --output text
+    cmds:
+      - uv run python scripts/demo.py --url {{.URL}} --cognito-client-id {{.CLIENT}} --image {{.REPO}}:fake-transactions

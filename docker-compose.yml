@@ -1,0 +1,26 @@
+# Local AWS: the AWS Emulator (https://github.com/aws/aws-emulator), built from AWS's own
+# package by emulator/Dockerfile. pipeyard uses it for S3.
+#
+# It serves HTTPS on 127.0.0.1:9297 with a certificate it creates at each start and writes
+# to ./.emulator/9297/ca.pem. That certificate is only valid for localhost / 127.0.0.1, so
+# run containers share this container's network namespace (--network container:pipeyard-aws)
+# rather than calling it by name. State is in memory: a restart starts from nothing.
+name: pipeyard
+services:
+  aws:
+    build: ./emulator
+    image: pipeyard-aws-emulator
+    container_name: pipeyard-aws
+    # Telemetry to AWS is on by default in the emulator; pipeyard turns it off.
+    # --auth off: accept any credentials, so there are no per-start keys to hand around.
+    command: ["--telemetry", "off", "--auth", "off"]
+    user: "${UID_GID:-1000:1000}"
+    ports:
+      - "127.0.0.1:9297:9297"
+    volumes:
+      - ./.emulator:/home/emulator/.aws/emulator
+    healthcheck:
+      test: ["CMD", "curl", "-fsk", "https://127.0.0.1:9297/__admin/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

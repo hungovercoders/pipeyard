@@ -1,0 +1,8 @@
+.git
+.venv
+cdk.out
+node_modules
+**/__pycache__
+.pytest_cache
+.ruff_cache
+.emulator

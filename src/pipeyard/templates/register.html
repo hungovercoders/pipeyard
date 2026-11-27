@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Register pipeline · pipeyard{% endblock %}
+{% block main %}
+<div class="crumb"><a href="/pipelines">Pipelines</a> /</div>
+<h1>{{ "Edit " ~ editing if editing else "Register pipeline" }}</h1>
+<p class="sub">Paste your <code>pipeline.yaml</code>. Saving a name that already exists replaces
+  that pipeline; past runs and datasets are kept.</p>
+{% if errors %}
+<div class="card errors" role="alert">
+  <strong>Not saved. Fix {{ "this" if errors | length == 1 else "these" }} and try again:</strong>
+  <ul>{% for e in errors %}<li class="mono">{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+<form method="post" action="/register">
+  <div class="card"><textarea name="yaml" aria-label="pipeline.yaml" spellcheck="false" required>{{ yaml_text }}</textarea></div>
+  <p class="actions" style="margin-top: 14px">
+    <button>Save pipeline</button>
+    <a class="button quiet" href="{{ "/pipelines/" ~ editing if editing else "/pipelines" }}">Cancel</a>
+  </p>
+</form>
+<p class="sub">The image must already be built and reachable by the runner (a local Docker image,
+  or an ECR URI in AWS). The fields and rules are in <code>docs/container-contract.md</code>.</p>
+{% endblock %}
