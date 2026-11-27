@@ -5,8 +5,7 @@ sign-in cookie and any Authorization header are removed before forwarding, so a 
 container never receives a token it could replay against the pipeyard API.
 """
 
-import asyncio
-
+import anyio
 import httpx
 import websockets
 from fastapi import HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -105,14 +104,24 @@ async def forward_websocket(browser: WebSocket, address: str) -> None:
             else:
                 await browser.send_bytes(data)
 
-    tasks = [asyncio.create_task(browser_to_app()), asyncio.create_task(app_to_browser())]
-    try:
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        for task in tasks:
-            task.cancel()
-        # Collect both, so that a send to a browser that has just gone is not left unhandled.
-        await asyncio.gather(*tasks, return_exceptions=True)
+    # Pump both directions until either side goes away, then stop the other. A task group
+    # (rather than bare asyncio tasks) keeps this well behaved when the server itself
+    # cancels the handler, for example at shutdown.
+    async with anyio.create_task_group() as pumps:
+
+        async def pump(direction) -> None:
+            try:
+                await direction()
+            except (WebSocketDisconnect, RuntimeError, websockets.ConnectionClosed, OSError):
+                pass  # one side closed while we were sending to it
+            pumps.cancel_scope.cancel()
+
+        pumps.start_soon(pump, browser_to_app)
+        pumps.start_soon(pump, app_to_browser)
+
+    # Always close the connection to the app, even if we are being cancelled, but do not
+    # let a slow close handshake hold things up.
+    with anyio.CancelScope(shield=True), anyio.move_on_after(2):
         await upstream.close()
         try:
             await browser.close()
