@@ -1,0 +1,19 @@
+# Local S3. The control plane runs on the host (`task up`); run containers join this
+# project's default network (pipeyard_default) and reach MinIO as http://minio:9000.
+name: pipeyard
+services:
+  minio:
+    # minio/minio is no longer published on Docker Hub; pgsty/minio is a community build of
+    # the same server. Any S3-compatible image with the same CLI works: set MINIO_IMAGE.
+    image: ${MINIO_IMAGE:-pgsty/minio:latest}
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: pipeyard
+      MINIO_ROOT_PASSWORD: pipeyard-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+volumes:
+  minio-data:

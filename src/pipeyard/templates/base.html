@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}pipeyard{% endblock %}</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    :root {
+      --bg: #f6f6f4; --surface: #ffffff; --border: #e2e2de; --text: #191919; --muted: #666666;
+      --accent: #257de0; --good: #0a7d1c; --bad: #c22f30; --run: #8a5a00;
+      color-scheme: light dark;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111111; --surface: #191919; --border: #333333; --text: #efefef; --muted: #9c9c9c;
+        --accent: #338ced; --good: #0aac23; --bad: #eb6263; --run: #d28e05;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+           font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    header { background: var(--surface); border-bottom: 1px solid var(--border); }
+    header .bar, main { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+    header .bar { display: flex; align-items: center; gap: 24px; height: 52px; }
+    .brand { font-weight: 700; letter-spacing: -0.01em; color: var(--text); text-decoration: none; }
+    nav { display: flex; gap: 4px; flex: 1; }
+    nav a { padding: 6px 10px; border-radius: 6px; color: var(--muted); text-decoration: none; }
+    nav a.on { color: var(--text); background: var(--bg); }
+    .org { color: var(--muted); font-size: 13px; white-space: nowrap; }
+    .org code { color: var(--text); }
+    main { padding-top: 28px; padding-bottom: 64px; }
+    h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+    h2 { font-size: 15px; margin: 32px 0 10px; }
+    a { color: var(--accent); }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    .crumb { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    .crumb a { color: var(--muted); }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+    .scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--border);
+             vertical-align: top; white-space: nowrap; }
+    th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+    tr:last-child td { border-bottom: 0; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td.wrap { white-space: normal; }
+    code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+    pre { margin: 0; padding: 14px; overflow-x: auto; white-space: pre-wrap; }
+    .status { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+    .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .status.succeeded { color: var(--good); } .status.failed { color: var(--bad); }
+    .status.running { color: var(--run); }
+    .status.running::before { animation: pulse 1s ease-in-out infinite alternate; }
+    @keyframes pulse { to { opacity: 0.25; } }
+    .err { color: var(--muted); font-size: 12.5px; white-space: pre-wrap; margin-top: 4px; max-width: 520px; }
+    button { font: inherit; font-weight: 500; padding: 7px 14px; border-radius: 7px; border: 0;
+             background: var(--accent); color: #fff; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .facts { display: flex; flex-wrap: wrap; gap: 6px 28px; padding: 14px; font-size: 14px; }
+    .facts dt { color: var(--muted); font-size: 12.5px; } .facts dd { margin: 0; }
+    .empty { padding: 28px 14px; color: var(--muted); text-align: center; }
+    .note { padding: 12px 14px; border-left: 3px solid var(--run); margin-bottom: 16px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-size: 12.5px; }
+    .chip span { color: var(--muted); }
+    #chart, #chart.vega-embed { display: block; width: 100%; padding: 16px 14px 6px; overflow: hidden; }
+    form.login { max-width: 340px; margin: 60px auto; padding: 24px; }
+    form.login label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+    form.login input { width: 100%; font: inherit; padding: 8px 10px; border-radius: 7px;
+                       border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+    form.login button { width: 100%; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <header><div class="bar">
+    <a class="brand" href="/">pipeyard</a>
+    <nav>
+      {% if org_id %}
+      <a href="/pipelines" class="{{ 'on' if nav == 'pipelines' }}">Pipelines</a>
+      <a href="/datasets" class="{{ 'on' if nav == 'datasets' }}">Datasets</a>
+      {% endif %}
+    </nav>
+    {% if org_id %}<span class="org">org <code>{{ org_id }}</code> · <a href="/logout">sign out</a></span>{% endif %}
+  </div></header>
+  <main>{% block main %}{% endblock %}</main>
+</body>
+</html>

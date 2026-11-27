@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Pipelines · pipeyard{% endblock %}
+{% block main %}
+<h1>Pipelines</h1>
+<p class="sub">Containers registered for this org. Each run lands a dataset as Parquet.</p>
+<div class="card scroll">
+  {% if pipelines %}
+  <table>
+    <tr><th>Name</th><th>Image</th><th>Output</th><th>Reports</th><th>Latest run</th></tr>
+    {% for p in pipelines %}
+    <tr>
+      <td><a href="/pipelines/{{ p.name }}">{{ p.name }}</a></td>
+      <td class="mono">{{ p.image }}</td>
+      <td class="mono">{{ p.output_dataset }}</td>
+      <td class="num">{{ p.reports | length }}</td>
+      <td>{% set r = latest.get(p.name) %}
+        {% if r %}<span class="status {{ r.status }}">{{ r.status }}</span>{% else %}<span class="sub">never run</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="empty">No pipelines yet. Register one with <code>task demo</code> or
+    <code>POST /api/pipelines</code> (body: your <code>pipeline.yaml</code>).</div>
+  {% endif %}
+</div>
+{% endblock %}

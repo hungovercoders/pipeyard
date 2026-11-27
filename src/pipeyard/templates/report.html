@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ report.name }} · pipeyard{% endblock %}
+{% block main %}
+<div class="crumb"><a href="/pipelines">Pipelines</a> / <a href="/pipelines/{{ spec.name }}">{{ spec.name }}</a> /</div>
+<h1>{{ report.name }}</h1>
+<p class="sub">Dataset <code>{{ report.dataset }}</code></p>
+{% if problem %}<div class="card note">{{ problem }}</div>{% endif %}
+{% if chart %}
+<div class="card" id="chart" role="img" aria-label="{{ report.chart.type }} chart of {{ report.chart.y }} by {{ report.chart.x }}; the same data is in the table below"></div>
+<script src="https://cdn.jsdelivr.net/npm/vega@5.30.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/vega-lite@5.21.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/vega-embed@6.26.0"></script>
+<script>
+  const spec = {{ chart | tojson }};
+  const dark = window.matchMedia("(prefers-color-scheme: dark)");
+  function draw() {
+    const c = dark.matches
+      ? { series: "#338ced", text: "#efefef", muted: "#9c9c9c", grid: "#2e2e2e", surface: "#191919" }
+      : { series: "#257de0", text: "#191919", muted: "#666666", grid: "#ececec", surface: "#ffffff" };
+    const mark = { color: c.series };
+    spec.config = {
+      background: "transparent", view: { stroke: null }, font: "system-ui, sans-serif",
+      mark, line: mark, area: mark, bar: mark,
+      point: { color: c.series, fill: c.series, stroke: c.surface, strokeWidth: 2 },
+      axis: { labelColor: c.muted, titleColor: c.muted, titleFontWeight: 500, gridColor: c.grid,
+              domainColor: c.grid, tickColor: c.grid, labelFontSize: 12, titleFontSize: 12 },
+      axisX: { grid: false },
+    };
+    vegaEmbed("#chart", spec, { actions: false });
+  }
+  dark.addEventListener("change", draw);
+  draw();
+</script>
+{% endif %}
+{% if result %}
+<h2>Result{% if result.truncated %} (first {{ result.rows | length }} rows){% endif %}</h2>
+<div class="card scroll">
+  <table>
+    {% set num = [] %}{% for t in result.types %}{{ num.append(t.startswith(("DOUBLE", "FLOAT", "DECIMAL", "BIGINT", "INTEGER", "HUGEINT", "SMALLINT", "TINYINT"))) or "" }}{% endfor %}
+    <tr>{% for c in result.columns %}<th class="{{ 'num' if num[loop.index0] }}">{{ c }}</th>{% endfor %}</tr>
+    {% for row in result.rows %}<tr>{% for v in row %}<td class="mono {{ 'num' if num[loop.index0] }}">{{ v if v is not none else "" }}</td>{% endfor %}</tr>{% endfor %}
+  </table>
+  {% if not result.rows %}<div class="empty">The query returned no rows.</div>{% endif %}
+</div>
+{% endif %}
+<h2>SQL</h2>
+<div class="card"><pre>{{ report.sql }}</pre></div>
+{% endblock %}

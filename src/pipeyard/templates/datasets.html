@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Datasets · pipeyard{% endblock %}
+{% block main %}
+<h1>Datasets</h1>
+<p class="sub">Built from the <code>_manifest.json</code> of each committed run. Reports read every committed run of a dataset.</p>
+<div class="card scroll">
+  {% if datasets %}
+  <table>
+    <tr><th>Dataset</th><th class="num">Runs</th><th class="num">Rows</th><th>Updated (UTC)</th><th>Produced by</th><th>Schema (latest run)</th></tr>
+    {% for d in datasets %}
+    <tr>
+      <td class="mono">{{ d.dataset }}</td>
+      <td class="num">{{ d.runs }}</td>
+      <td class="num">{{ "{:,}".format(d.row_count) }}</td>
+      <td>{{ d.updated_at.strftime("%Y-%m-%d %H:%M:%S") if d.updated_at else "–" }}</td>
+      <td>{% for p in producers.get(d.dataset, []) %}<a href="/pipelines/{{ p.name }}">{{ p.name }}</a>{{ ", " if not loop.last }}{% else %}–{% endfor %}</td>
+      <td class="wrap"><div class="chips">{% for c in d.schema %}<span class="chip mono">{{ c.name }} <span>{{ c.type }}</span></span>{% endfor %}</div></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty">No datasets yet. They appear after a pipeline's first successful run.</div>{% endif %}
+</div>
+{% endblock %}

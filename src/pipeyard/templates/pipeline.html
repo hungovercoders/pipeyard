@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ spec.name }} · pipeyard{% endblock %}
+{% block main %}
+<div class="crumb"><a href="/pipelines">Pipelines</a> /</div>
+<div class="row">
+  <div><h1>{{ spec.name }}</h1><p class="sub mono">{{ spec.image }}</p></div>
+  <button hx-post="/pipelines/{{ spec.name }}/runs" hx-target="#runs" hx-swap="outerHTML"
+          hx-disabled-elt="this">Trigger run</button>
+</div>
+<dl class="card facts">
+  <div><dt>Output dataset</dt><dd class="mono">{{ spec.output_dataset }}</dd></div>
+  {% if spec.inputs %}<div><dt>Input dataset</dt><dd class="mono">{{ spec.inputs[0].dataset }}</dd></div>{% endif %}
+  <div><dt>CPU</dt><dd>{{ spec.cpu }} units</dd></div>
+  <div><dt>Memory</dt><dd>{{ spec.memory }} MiB</dd></div>
+  <div><dt>Timeout</dt><dd>{{ spec.timeout_seconds }} s</dd></div>
+</dl>
+
+<h2>Reports</h2>
+<div class="card scroll">
+  {% if spec.reports %}
+  <table>
+    <tr><th>Name</th><th>Dataset</th><th>Chart</th></tr>
+    {% for r in spec.reports %}
+    <tr>
+      <td><a href="/pipelines/{{ spec.name }}/reports/{{ r.slug }}">{{ r.name }}</a></td>
+      <td class="mono">{{ r.dataset }}</td>
+      <td>{{ r.chart.type if r.chart else "table only" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty">This pipeline defines no reports.</div>{% endif %}
+</div>
+
+<h2>Runs</h2>
+{% include "_runs.html" %}
+{% endblock %}
