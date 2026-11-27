@@ -17,6 +17,8 @@ services:
     user: "${UID_GID:-1000:1000}"
     ports:
       - "127.0.0.1:9297:9297"
+      # Report apps run in this container's network namespace and listen on these ports.
+      - "127.0.0.1:8600-8619:8600-8619"
     volumes:
       - ./.emulator:/home/emulator/.aws/emulator
     healthcheck:

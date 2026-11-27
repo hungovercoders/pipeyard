@@ -1,7 +1,7 @@
-"""Runs one pipeline container. Two implementations of the same two-method interface.
+"""Runs one container: a pipeline run, or a report app. Two implementations, one interface.
 
 The control plane never waits on a container: ``start`` returns a handle that is stored in
-the run record, and ``poll`` is called when someone next reads a run that is still running.
+the run (or report app) record, and ``poll`` is called when someone next reads it.
 """
 
 import json
@@ -16,10 +16,21 @@ from typing import Protocol
 import boto3
 
 from .config import Settings
-from .contract import PipelineSpec
 
 TIMEOUT_EXIT_CODE = 124
 TIMEOUT_LABEL = "pipeyard.timeout_seconds"
+
+
+@dataclass(frozen=True)
+class Job:
+    """What to run. A pipeline run exits by itself; a report app serves on ``port``."""
+
+    name: str  # labels the container / names the task definition family
+    image: str
+    cpu: int
+    memory: int
+    timeout_seconds: int  # hard limit: a run's timeout, or a report app's lifetime
+    port: int | None = None
 
 
 @dataclass
@@ -31,7 +42,7 @@ class RunState:
 
 
 class Runner(Protocol):
-    def start(self, spec: PipelineSpec, org_id: str, run_id: str, env: dict[str, str]) -> str:
+    def start(self, job: Job, org_id: str, run_id: str, env: dict[str, str]) -> str:
         """Start the container with ``env`` and return a handle for ``poll``."""
 
     def poll(self, handle: str) -> RunState:
@@ -43,6 +54,12 @@ class Runner(Protocol):
     def cleanup(self, handle: str) -> None:
         """Called once the outcome has been saved to the run record."""
 
+    def address(self, handle: str, port: int) -> str | None:
+        """``host:port`` where the control plane can reach a report app, once it has one."""
+
+    def stop(self, handle: str) -> None:
+        """Stop a container now. Harmless if it has already gone."""
+
 
 class DockerRunner:
     """Local mode: ``docker run`` in the AWS Emulator's network namespace."""
@@ -53,7 +70,7 @@ class DockerRunner:
         self.network = settings.docker_network
         self.ca_bundle = settings.s3_ca_bundle
 
-    def start(self, spec: PipelineSpec, org_id: str, run_id: str, env: dict[str, str]) -> str:
+    def start(self, job: Job, org_id: str, run_id: str, env: dict[str, str]) -> str:
         name = f"pipeyard-{run_id}"
         cmd = [
             "docker",
@@ -71,15 +88,15 @@ class DockerRunner:
             "--security-opt",
             "no-new-privileges",
             "--cpus",
-            str(spec.cpu / 1024),
+            str(job.cpu / 1024),
             "--memory",
-            f"{spec.memory}m",
+            f"{job.memory}m",
             "--label",
             f"pipeyard.org_id={org_id}",
             "--label",
             f"pipeyard.run_id={run_id}",
             "--label",
-            f"{TIMEOUT_LABEL}={spec.timeout_seconds}",
+            f"{TIMEOUT_LABEL}={job.timeout_seconds}",
         ]
         if self.ca_bundle:
             # Let the container's AWS SDK trust the emulator's certificate. The emulator
@@ -93,7 +110,7 @@ class DockerRunner:
             env = {**env, "AWS_CA_BUNDLE": self.CA_PATH}
         for key in env:
             cmd += ["--env", key]  # values come from the subprocess env, not the command line
-        cmd.append(spec.image)
+        cmd.append(job.image)
         proc = subprocess.run(cmd, env={**_base_env(), **env}, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(f"docker run failed: {proc.stderr.strip()}")
@@ -101,7 +118,7 @@ class DockerRunner:
         # container is a harmless error. If this process restarts the timer is lost, so
         # poll() enforces the same deadline from the container's own start time.
         timer = threading.Timer(
-            spec.timeout_seconds,
+            job.timeout_seconds,
             subprocess.run,
             [["docker", "kill", name]],
             {"capture_output": True},
@@ -148,6 +165,14 @@ class DockerRunner:
     def cleanup(self, handle: str) -> None:
         subprocess.run(["docker", "rm", "--force", handle], capture_output=True)
 
+    def address(self, handle: str, port: int) -> str | None:
+        # The container shares the emulator's network namespace, and the emulator publishes
+        # the report port range on the host's loopback (see docker-compose.yml).
+        return f"127.0.0.1:{port}"
+
+    def stop(self, handle: str) -> None:
+        self.cleanup(handle)
+
 
 def _docker_time(value: str) -> datetime | None:
     """Docker timestamps have nanoseconds; '0001-01-01...' means 'not yet'."""
@@ -174,18 +199,25 @@ class FargateRunner:
         self.settings = settings
         self.ecs = ecs or boto3.client("ecs", region_name=settings.region)
 
-    def start(self, spec: PipelineSpec, org_id: str, run_id: str, env: dict[str, str]) -> str:
+    def start(self, job: Job, org_id: str, run_id: str, env: dict[str, str]) -> str:
         template = self.ecs.describe_task_definition(
             taskDefinition=self.settings.run_task_template
         )["taskDefinition"]
         containers = template["containerDefinitions"]
-        next(c for c in containers if c["name"] == "pipeline")["image"] = spec.image
-        tags = [{"key": "org_id", "value": org_id}, {"key": "pipeline", "value": spec.name}]
+        main = next(c for c in containers if c["name"] == "pipeline")
+        main["image"] = job.image
+        if job.port:
+            main["portMappings"] = [{"containerPort": job.port, "protocol": "tcp"}]
+        # Report apps accept connections from the control plane; runs accept none.
+        security_group = (
+            self.settings.report_security_group if job.port else self.settings.run_security_group
+        )
+        tags = [{"key": "org_id", "value": org_id}, {"key": "pipeline", "value": job.name}]
         task_def = self.ecs.register_task_definition(
-            family=f"pipeyard-{org_id}-{spec.name}",
+            family=f"pipeyard-{org_id}-{job.name}"[:255],
             containerDefinitions=containers,
-            cpu=str(spec.cpu),
-            memory=str(spec.memory),
+            cpu=str(job.cpu),
+            memory=str(job.memory),
             networkMode="awsvpc",
             requiresCompatibilities=["FARGATE"],
             executionRoleArn=template["executionRoleArn"],
@@ -200,7 +232,7 @@ class FargateRunner:
             networkConfiguration={
                 "awsvpcConfiguration": {
                     "subnets": self.settings.run_subnets.split(","),
-                    "securityGroups": [self.settings.run_security_group],
+                    "securityGroups": [security_group],
                     "assignPublicIp": "ENABLED",
                 }
             },
@@ -213,7 +245,7 @@ class FargateRunner:
                     {
                         "name": "timeout",
                         "environment": [
-                            {"name": "TIMEOUT_SECONDS", "value": str(spec.timeout_seconds)}
+                            {"name": "TIMEOUT_SECONDS", "value": str(job.timeout_seconds)}
                         ],
                     },
                 ]
@@ -241,6 +273,23 @@ class FargateRunner:
 
     def cleanup(self, handle: str) -> None:
         pass  # ECS removes stopped tasks itself
+
+    def address(self, handle: str, port: int) -> str | None:
+        result = self.ecs.describe_tasks(cluster=self.settings.ecs_cluster, tasks=[handle])
+        for task in result["tasks"]:
+            for attachment in task.get("attachments", []):
+                for detail in attachment.get("details", []):
+                    if detail["name"] == "privateIPv4Address":
+                        return f"{detail['value']}:{port}"
+        return None  # the task has no network interface yet
+
+    def stop(self, handle: str) -> None:
+        try:
+            self.ecs.stop_task(
+                cluster=self.settings.ecs_cluster, task=handle, reason="report stopped"
+            )
+        except self.ecs.exceptions.ClientError:
+            pass  # already gone
 
 
 def make_runner(settings: Settings) -> Runner:

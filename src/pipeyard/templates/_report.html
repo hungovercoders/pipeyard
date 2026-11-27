@@ -1,0 +1,26 @@
+<div id="report-state"
+     {% if report.status == "starting" %}
+     hx-get="/pipelines/{{ spec.name }}/reports/{{ report.slug }}/state" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  {% set action = "/pipelines/" ~ spec.name ~ "/reports/" ~ report.slug %}
+  {% if report.status == "running" %}
+  <div class="card facts report-bar">
+    <div><dt>App</dt><dd><span class="status running">running</span></dd></div>
+    <div><dt>Stops</dt><dd>after {{ (report.idle_timeout_seconds / 60) | round(1) | string | replace(".0", "") }} min unused, or at {{ report.expires_at.strftime("%H:%M") }} UTC</dd></div>
+    <div class="actions">
+      <a class="button quiet" href="{{ report.url }}" target="_blank" rel="noopener">Open in new tab</a>
+      <button class="quiet" hx-post="{{ action }}/stop" hx-target="#report-state" hx-swap="outerHTML">Stop</button>
+    </div>
+  </div>
+  <iframe class="card report-frame" src="{{ report.url }}" title="{{ report.name }}"></iframe>
+  {% elif report.status == "starting" %}
+  <div class="card empty"><span class="status running">starting</span>
+    <p>Starting the report's container. This page updates when it is ready.</p></div>
+  {% else %}
+  {% if report.error %}<div class="card errors" role="alert"><strong>The report stopped with an error</strong>
+    <div class="err mono">{{ report.error }}</div></div>{% endif %}
+  <div class="card empty">
+    <p>This report is a web app that runs only while it is being used. It is stopped at the moment.</p>
+    <button hx-post="{{ action }}/start" hx-target="#report-state" hx-swap="outerHTML" hx-disabled-elt="this">Start report</button>
+  </div>
+  {% endif %}
+</div>

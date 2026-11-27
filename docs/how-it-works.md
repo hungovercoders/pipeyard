@@ -1,10 +1,10 @@
 # How it works
 
-pipeyard is one small web app, an S3 bucket, and whatever container you give it. This page
-follows a run from the button press to the chart, then covers where things are stored, the
-API, and how orgs are kept apart.
+pipeyard is one small web app, an S3 bucket, and whatever containers you give it. This page
+follows a pipeline run and then a report from the button press to the screen, then covers
+where things are stored, the API, and how orgs are kept apart.
 
-## A run, from click to chart
+## A pipeline run
 
 ```mermaid
 sequenceDiagram
@@ -25,9 +25,6 @@ sequenceDiagram
     P->>R: how did it end?
     P->>S: check manifest and Parquet
     P->>S: update run record (status: succeeded)
-    You->>P: open a report
-    P->>S: DuckDB reads the Parquet of succeeded runs
-    P-->>You: table + chart
 ```
 
 Three things in that picture are worth a closer look.
@@ -35,14 +32,13 @@ Three things in that picture are worth a closer look.
 **pipeyard never waits on your container.** Starting a run returns immediately. The outcome
 is worked out the next time anyone reads the run: pipeyard asks the runner how the
 container ended, checks the output, and saves the verdict. That is why there is no worker
-process or queue to operate. The cost is that a run nobody looks at stays "running" in its
-record until somebody does, although opening the datasets page or any report counts as
-looking.
+process or queue to operate for runs. The cost is that a run nobody looks at stays "running" in its
+record until somebody does, although opening the datasets page counts as looking.
 
 **The run record is the source of truth.** Your container writes the data and the manifest,
-but only pipeyard writes the run record, and datasets and reports read *only* the runs it
-recorded as succeeded. A run that crashed, timed out or wrote a bad manifest contributes
-nothing, even if it left files in S3.
+but only pipeyard writes the run record, and the datasets page counts *only* the runs it
+recorded as succeeded. When a run crashes, times out or writes a bad manifest, pipeyard
+also deletes whatever it left in S3, so report containers never read half a run.
 
 **Timeouts do not depend on pipeyard being up.** Locally a timer kills the container, and
 if pipeyard restarts, the deadline is recomputed from the container's own start time. In
@@ -51,13 +47,14 @@ stop the task.
 
 ## Where everything is stored
 
-One bucket, one prefix per org, four kinds of object. There is no database.
+One bucket, one prefix per org, five kinds of object. There is no database.
 
 ```
 orgs/{org_id}/pipelines/{name}/pipeline.yaml
 orgs/{org_id}/runs/{run_id}.json
 orgs/{org_id}/datasets/{dataset}/run={run_id}/*.parquet
 orgs/{org_id}/datasets/{dataset}/run={run_id}/_manifest.json
+orgs/{org_id}/reports/{pipeline}/{slug}.json
 ```
 
 | What | Format | Written by |
@@ -66,29 +63,64 @@ orgs/{org_id}/datasets/{dataset}/run={run_id}/_manifest.json
 | Run record | One JSON object per run: status, times, row count, error | pipeyard, at start and when the run is settled |
 | Data | Parquet, one or more files per run | Your container |
 | Manifest | JSON: dataset, run id, row count, schema | Your container, last |
+| Report app record | JSON: starting, running or stopped; expiry; address | pipeyard, as a report starts and stops |
 
 Each run writes into its own `run={run_id}/` folder, so runs never overwrite each other. A
-dataset is simply every succeeded run's folder read together, and each row carries a `run`
-column saying which run it came from.
+dataset is simply every finished run's folder read together.
 
-The lists you see in the UI are DuckDB queries over these prefixes (`read_json` for runs,
-`read_parquet` for data). pipeyard never deletes or compacts anything in v0, so old runs
+The lists you see in the UI are DuckDB `read_json` queries over these prefixes. pipeyard never deletes or compacts anything in v0, so old runs
 stay until you remove them.
 
-## How reports run
+## A report
 
-When you open a report, pipeyard:
+```mermaid
+sequenceDiagram
+    actor You
+    participant P as pipeyard
+    participant R as Runner (Docker / Fargate)
+    participant A as Your report container
+    participant S as S3
 
-1. Checks the SQL is exactly one `SELECT`. This is checked at registration too.
-2. Opens a fresh, in-memory DuckDB connection for this one query.
-3. Gives it credentials that only work under `orgs/{your org}/`.
-4. Creates a view per dataset, each reading the Parquet of that dataset's succeeded runs.
-5. Switches off all other file and network access, and locks the configuration so SQL
-   cannot switch it back on.
-6. Replaces `{{dataset}}` with the report's dataset and runs your SQL.
+    You->>P: open the report
+    P->>R: start image with PORT, BASE_PATH, INPUT_URI, read-only credentials
+    R->>A: run
+    loop every 2 s, while the page shows "starting"
+        P->>A: GET BASE_PATH/ (is it answering yet?)
+    end
+    A->>S: read the dataset's finished runs
+    You->>P: GET /apps/pipeline/report/...
+    P->>P: check sign-in, strip pipeyard's cookie
+    P->>A: the same request
+    A-->>You: the app's page, through pipeyard
+    Note over P,A: stopped once nobody has used it for idle_timeout_seconds
+```
 
-The result is capped at 5,000 rows. Because every dataset in your org is a view under its
-own name, one report can join several datasets.
+A report is a web app in a container, and pipeyard is a reverse proxy in front of it.
+
+**Started on demand.** Nothing runs until someone opens the report, which wakes it. There
+is one instance per report, shared by everyone in the org.
+
+**Reached only through pipeyard.** The browser talks to
+`/apps/{pipeline}/{report}/...` on pipeyard, which checks the sign-in, removes its own
+cookie and any `Authorization` header, and forwards the request, path unchanged, to the
+container. WebSockets are forwarded the same way, which is what makes Streamlit-style apps
+work. Locally the container is reached on a loopback port; in AWS on the task's private
+address, which only pipeyard's security group may connect to.
+
+**Scaled to zero when idle.** pipeyard notes the time of every request it forwards and
+counts the WebSockets it has open to each app. Every 15 seconds it stops any app that has
+no open WebSocket and has had no request for `idle_timeout_seconds` (5 minutes by default).
+An open browser tab on a Streamlit-style app holds a WebSocket, so a dashboard someone is
+looking at is never stopped for being quiet.
+
+This is the one piece of pipeyard that runs on a clock. The usage notes are kept in
+memory, so if pipeyard restarts it treats each running app as used at the moment it next
+sees it. As a backstop, the mechanism that enforces a pipeline's timeout also stops a
+report `lifetime_seconds` after it started (50 minutes at most), in use or not, because
+the app's S3 credentials last an hour.
+
+**Read-only.** A report's credentials can read its org's prefix and nothing else, and
+cannot write at all.
 
 ## How orgs are kept apart
 
@@ -98,13 +130,17 @@ in place, in three independent layers:
 | Layer | What it does |
 |---|---|
 | **The token** | Every request's org is read from a verified sign-in token: a Cognito ID token in AWS, a locally signed stub in development. No route accepts an org in its path, query or body. |
-| **The code** | S3 keys are built in one module (`contract.py`), and every helper starts from `orgs/{org_id}/`. Report SQL runs in the sandbox described above. |
-| **IAM (AWS only)** | One role allows only `orgs/${aws:PrincipalTag/org_id}/*`. pipeyard assumes it with an `org_id` session tag and uses those credentials for your container, for DuckDB and for its own S3 calls. pipeyard's own role has no S3 permissions at all. |
+| **The code** | S3 keys are built in one module (`contract.py`), and every helper starts from `orgs/{org_id}/`. The report proxy looks an app up by the caller's org, so another org's app does not exist as far as it can tell. |
+| **IAM (AWS only)** | One role allows only `orgs/${aws:PrincipalTag/org_id}/*`. pipeyard assumes it with an `org_id` session tag and uses those credentials for your containers and for its own S3 calls. Report containers get a read-only version. pipeyard's own role has no S3 permissions at all. |
 
 If the code layer had a bug, IAM would still refuse the request. The tests in
-`tests/test_org_scoping.py` attack each layer: cross-org requests, forged, expired and
-unsigned tokens, path tricks, and report SQL that tries to read another org's files or
-`/etc/passwd`.
+`tests/test_org_scoping.py` and `tests/test_reports.py` attack each layer: cross-org
+requests, forged, expired and unsigned tokens, path tricks, and attempts to reach another
+org's running report over HTTP and WebSocket.
+
+One thing to be aware of: a report app is served from pipeyard's own web address, so the
+JavaScript in it runs with the same standing as pipeyard's pages for whoever is viewing
+it. That is fine for reports your own org wrote, which is the only kind there is.
 
 ## The API
 
@@ -120,14 +156,18 @@ Everything the UI does is available as JSON. Send `Authorization: Bearer <token>
 | `GET /api/pipelines/{name}/runs` | A pipeline's runs, newest first |
 | `GET /api/runs/{run_id}` | One run. Poll this until `status` is no longer `running`. |
 | `GET /api/datasets` | Datasets, with row counts and schema |
-| `GET /api/pipelines/{name}/reports/{slug}` | Run a report. `slug` is the report name in lower case with dashes, e.g. `daily-volume`. |
+| `GET /api/pipelines/{name}/reports/{slug}` | A report's state: `stopped`, `starting` or `running`, and its URL. `slug` is the report name in lower case with dashes, e.g. `coffee-dashboard`. |
+| `POST /api/pipelines/{name}/reports/{slug}/start` | Start the report's app. Poll the state until it is `running`. |
+| `POST /api/pipelines/{name}/reports/{slug}/stop` | Stop it now |
+| `ANY /apps/{name}/{slug}/...` | The running app itself, proxied |
 
-`scripts/demo.py` is a complete client in about 100 lines of standard-library Python.
+`scripts/demo.py` is a complete client in about 130 lines of standard-library Python.
 
 ## The code, in one paragraph
 
 `app.py` holds the routes for both the API and the UI. It resolves the org with `auth.py`,
 builds keys and validates input with `contract.py`, reads and writes objects with
 `storage.py`, starts and checks containers through `runner.py` (one interface, a Docker
-implementation and a Fargate one), and answers lists and reports with `query.py`.
+implementation and a Fargate one), forwards report traffic with `proxy.py`, and answers
+the run and dataset lists with `query.py`.
 `config.py` reads the environment. That is all of it.

@@ -8,12 +8,12 @@ local stand-in for S3. No AWS account is needed.
 | Command | What it does |
 |---|---|
 | `task up` | Starts the local S3 emulator and pipeyard on <http://localhost:8000>. Leave it running. |
-| `task demo` | Builds the example image, registers it, runs it and prints a report |
+| `task demo` | Builds the example images, registers the pipeline, runs it and starts its report |
 | `task down` | Stops the emulator. This also deletes all local data. |
 | `task test` | Runs the tests. Add pytest arguments after `--`, e.g. `task test -- -k timeout`. |
 | `task lint` | Ruff lint and format check |
 | `task fmt` | Auto-format and fix |
-| `task build-example` | Builds only the example image |
+| `task build-example` | Builds only the example pipeline and report images |
 
 Run `task` with no arguments to list them all, including the AWS ones.
 
@@ -50,7 +50,7 @@ export AWS_CA_BUNDLE=.emulator/9297/ca.pem
 aws --endpoint-url https://127.0.0.1:9297 s3 ls --recursive s3://pipeyard/
 ```
 
-## How local runs work
+## How local runs and reports work
 
 When you trigger a run, pipeyard calls `docker run` with the image from your
 `pipeline.yaml`. The container gets a read-only filesystem with a writable `/tmp`, the
@@ -58,16 +58,27 @@ When you trigger a run, pipeyard calls `docker run` with the image from your
 [the contract](container-contract.md). Images come from your local Docker, so
 `docker build` is all it takes to publish a change.
 
+A report is started the same way when you open it, with one difference: it
+is given a free port from the range 8600 to 8619 to listen on, which the emulator container
+publishes on your machine's loopback. pipeyard proxies to it there. That allows 20 reports
+at once locally. You can also open `http://localhost:8600` directly to see an app without
+the proxy while debugging, at the path in its `BASE_PATH`.
+
 ## Tests
 
 `task test` starts the emulator and runs about 110 tests against it. They use the real app
-and real S3 calls, with a fake runner in place of Docker, so they finish in seconds. Only
-`task demo` exercises a real container.
+and real S3 calls, with a fake runner in place of Docker and a tiny stand-in web server in
+place of a report container, so they finish in seconds. Only `task demo` exercises real
+containers.
+
+Every push to `main` and every pull request runs `task lint` and `task test` in GitHub
+Actions (`.github/workflows/ci.yml`).
 
 | File | What it covers |
 |---|---|
-| `tests/test_local_loop.py` | The main flow: register, run, datasets, reports, UI pages, the register form |
-| `tests/test_org_scoping.py` | One org cannot see or reach another's data; the SQL sandbox; bad tokens |
+| `tests/test_local_loop.py` | The main flow: register, run, datasets, UI pages, the register form |
+| `tests/test_reports.py` | Report apps: start, stop, expiry, the HTTP and WebSocket proxy, what is never forwarded |
+| `tests/test_org_scoping.py` | One org cannot see or reach another's data; bad tokens; path tricks |
 | `tests/test_contract.py` | `pipeline.yaml` and manifest validation, and the error messages |
 | `tests/test_aws_mode.py` | Fargate runner, credentials and Cognito tokens with stubbed clients; the synthesized stack |
 | `tests/test_review_fixes.py` | Regressions: failed runs leaving files, concurrent readers, timeouts |
@@ -85,11 +96,13 @@ local use; you should rarely need these.
 | `PIPEYARD_S3_CA_BUNDLE` | `.emulator/9297/ca.pem` | The emulator's certificate |
 | `PIPEYARD_RUNNER_S3_ENDPOINT_URL` | `https://127.0.0.1:9297` | Where run containers reach local S3 |
 | `PIPEYARD_DOCKER_NETWORK` | `container:pipeyard-aws` | The `--network` run containers use |
+| `PIPEYARD_REPORT_PORTS` | `8600-8619` | Ports local reports listen on; must match `docker-compose.yml` |
 | `PIPEYARD_DEV_ORG_ID` | `demo` | The org the local stub signs you in as |
 
 ## When something goes wrong
 
-**Everything disappeared.** The emulator restarted, and it keeps data in memory. Run
+**Everything disappeared.** The emulator restarted, and it keeps data in memory. Running
+reports stop too, because they share its network. Run
 `task demo`, or register your pipelines again.
 
 **Certificate or SSL errors after restarting the emulator.** It generated a new
@@ -104,6 +117,20 @@ limits anonymous pulls. Use a mirror:
 
 **Tests stop with "AWS emulator not reachable".** Start it with `task emulator`, which
 `task test` normally does for you.
+
+**A report stays "starting".** pipeyard is waiting for the app to answer on `$PORT` under
+`$BASE_PATH`. Check that the app uses both, and that it listens on `0.0.0.0`, not only on
+`127.0.0.1`. `docker logs` on the `pipeyard-...` container shows what it is doing.
+
+**A report shows a blank page or missing styles.** The app is not serving under
+`$BASE_PATH`, so its links point at pipeyard instead of at itself. See the framework
+settings in [the contract](container-contract.md#report-containers).
+
+**A report stopped while I was away.** That is scale to zero: it had been unused for
+`idle_timeout_seconds` (5 minutes by default). Open it again and it restarts.
+
+**A report says all local report ports are in use.** Twenty are available. Stop a report
+you are not using.
 
 **A run stays "running".** Run status is settled when somebody looks at it, so reload the
 page. If the container really is stuck, it is stopped at `timeout_seconds`.

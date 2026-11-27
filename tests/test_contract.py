@@ -21,7 +21,7 @@ def errors(yaml_text: str) -> list[str]:
 def test_example_is_valid(example_yaml):
     spec = contract.parse_pipeline(example_yaml)
     assert spec.output_dataset == "transactions"
-    assert [r.slug for r in spec.reports] == ["daily-volume", "volume-by-category"]
+    assert [r.slug for r in spec.reports] == ["transactions-dashboard"]
 
 
 def test_defaults():
@@ -55,26 +55,27 @@ def test_defaults():
             "timeout_seconds: Input should be less than or equal to 3000",
         ),
         (VALID + "schedule: daily", "schedule: Extra inputs are not permitted"),
+        (VALID + "reports: [{name: r, dataset: d}]", "reports.0.image: Field required"),
+        (VALID + "reports: [{name: r, image: i}]", "reports.0.dataset: Field required"),
         (
-            VALID + "reports: [{name: r, dataset: d, sql: 'drop table x'}]",
-            "reports.0.sql: must be a SELECT, found DROP",
+            VALID + "reports: [{name: r, image: i, dataset: d, sql: select 1}]",
+            "reports.0.sql: Extra inputs are not permitted",
         ),
         (
-            VALID + "reports: [{name: r, dataset: d, sql: 'select 1; select 2'}]",
-            "reports.0.sql: must be exactly one statement, found 2",
+            VALID + "reports: [{name: r, image: i, dataset: d, cpu: 256, memory: 4096}]",
+            "reports.0: memory 4096 is not valid for cpu 256",
         ),
         (
-            VALID + "reports: [{name: r, dataset: d, sql: 'selec nope'}]",
-            "reports.0.sql: does not parse",
+            VALID + "reports: [{name: r, image: i, dataset: d, idle_timeout_seconds: 5}]",
+            "reports.0.idle_timeout_seconds: Input should be greater than or equal to 60",
         ),
         (
-            VALID
-            + "reports: [{name: r, dataset: d, sql: 'select 1', chart: {type: pie, x: a, y: b}}]",
-            "reports.0.chart.type: Input should be 'line', 'bar', 'area' or 'point'",
+            VALID + "reports: [{name: r, image: i, dataset: d, lifetime_seconds: 99999}]",
+            "reports.0.lifetime_seconds: Input should be less than or equal to 3000",
         ),
         (
-            VALID + "reports: [{name: A b, dataset: d, sql: from d}, "
-            "{name: a-B, dataset: d, sql: from d}]",
+            VALID + "reports: [{name: A b, image: i, dataset: d}, "
+            "{name: a-B, image: i, dataset: d}]",
             "report names must be unique",
         ),
     ],

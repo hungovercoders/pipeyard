@@ -35,6 +35,8 @@ class Settings:
     runner_s3_endpoint_url: str = field(
         default_factory=lambda: _env("PIPEYARD_RUNNER_S3_ENDPOINT_URL", "https://127.0.0.1:9297")
     )
+    # Ports report apps listen on locally; docker-compose.yml publishes the same range.
+    report_ports: str = field(default_factory=lambda: _env("PIPEYARD_REPORT_PORTS", "8600-8619"))
     dev_org_id: str = field(default_factory=lambda: _env("PIPEYARD_DEV_ORG_ID", "demo"))
     dev_secret: str = field(
         default_factory=lambda: _env("PIPEYARD_DEV_SECRET", "pipeyard-local-dev-secret-not-for-aws")
@@ -48,6 +50,9 @@ class Settings:
     run_role_arn: str = field(default_factory=lambda: _env("PIPEYARD_RUN_ROLE_ARN"))
     run_subnets: str = field(default_factory=lambda: _env("PIPEYARD_RUN_SUBNETS"))
     run_security_group: str = field(default_factory=lambda: _env("PIPEYARD_RUN_SECURITY_GROUP"))
+    report_security_group: str = field(
+        default_factory=lambda: _env("PIPEYARD_REPORT_SECURITY_GROUP")
+    )
     secure_cookies: bool = field(default_factory=lambda: _env("PIPEYARD_SECURE_COOKIES") == "true")
 
     def __post_init__(self) -> None:

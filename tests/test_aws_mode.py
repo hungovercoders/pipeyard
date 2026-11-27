@@ -1,6 +1,7 @@
 """Phase 3, without an AWS account: stubbed clients for the runner and credentials, a local
 RSA key for Cognito-style tokens, and assertions on the synthesized template."""
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -11,10 +12,10 @@ import pytest
 from botocore.stub import ANY, Stubber
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from pipeyard import contract, storage
+from pipeyard import storage
 from pipeyard.auth import Auth, AuthError
 from pipeyard.config import Settings
-from pipeyard.runner import TIMEOUT_EXIT_CODE, FargateRunner
+from pipeyard.runner import TIMEOUT_EXIT_CODE, FargateRunner, Job
 
 AWS = Settings(
     mode="aws",
@@ -27,6 +28,7 @@ AWS = Settings(
     run_role_arn="arn:aws:iam::111111111111:role/run",
     run_subnets="subnet-a,subnet-b",
     run_security_group="sg-1",
+    report_security_group="sg-reports",
 )
 TASK = "arn:aws:ecs:eu-west-2:111111111111:task/cluster/abc"
 
@@ -43,9 +45,7 @@ def ecs():
 
 def test_fargate_start_copies_the_template_and_tags_the_run(ecs, example_yaml):
     client, stub = ecs
-    spec = contract.parse_pipeline(
-        example_yaml.replace("cpu: 256", "cpu: 512\n#").replace("memory: 512", "memory: 1024")
-    )
+    spec = Job("fake-transactions", "repo/img:1", 512, 1024, 600)
     template_containers = [
         {
             "name": "pipeline",
@@ -133,7 +133,7 @@ def test_fargate_start_reports_capacity_failures(ecs, example_yaml):
         "run_task", {"tasks": [], "failures": [{"reason": "Capacity is unavailable"}]}
     )
     with pytest.raises(RuntimeError, match="Capacity is unavailable"):
-        FargateRunner(AWS, client).start(contract.parse_pipeline(example_yaml), "acme", "r1", {})
+        FargateRunner(AWS, client).start(Job("p", "img", 256, 512, 600), "acme", "r1", {})
 
 
 @pytest.mark.parametrize(
@@ -189,6 +189,67 @@ def test_fargate_poll(ecs, task, expected):
     assert (state.running, state.exit_code, state.detail) == expected
 
 
+def test_fargate_report_app_is_reachable_only_through_the_report_security_group(ecs):
+    client, stub = ecs
+    stub.add_response(
+        "describe_task_definition",
+        {
+            "taskDefinition": {
+                "containerDefinitions": [{"name": "pipeline", "image": "b"}],
+                "executionRoleArn": "arn:x",
+            }
+        },
+    )
+    stub.add_response(
+        "register_task_definition",
+        {"taskDefinition": {"taskDefinitionArn": "arn:td:1"}},
+        {
+            "family": "pipeyard-acme-sales-dashboard",
+            "containerDefinitions": [
+                {
+                    "name": "pipeline",
+                    "image": "repo/dash:1",
+                    "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
+                }
+            ],
+            "cpu": ANY, "memory": ANY, "networkMode": ANY, "requiresCompatibilities": ANY,
+            "executionRoleArn": ANY, "volumes": ANY, "runtimePlatform": ANY, "tags": ANY,
+        },
+    )  # fmt: skip
+    stub.add_response(
+        "run_task",
+        {"tasks": [{"taskArn": TASK}], "failures": []},
+        {
+            "cluster": ANY, "taskDefinition": ANY, "launchType": ANY, "overrides": ANY,
+            "tags": ANY,
+            "networkConfiguration": {
+                "awsvpcConfiguration": {
+                    "subnets": ["subnet-a", "subnet-b"],
+                    "securityGroups": ["sg-reports"],
+                    "assignPublicIp": "ENABLED",
+                }
+            },
+        },
+    )  # fmt: skip
+    job = Job("sales-dashboard", "repo/dash:1", 256, 512, 1800, port=8080)
+    assert FargateRunner(AWS, client).start(job, "acme", "i1", {"PORT": "8080"}) == TASK
+
+
+def test_fargate_report_address_and_stop(ecs):
+    client, stub = ecs
+    runner = FargateRunner(AWS, client)
+    expected = {"cluster": "cluster", "tasks": [TASK]}
+    stub.add_response("describe_tasks", {"tasks": [{"attachments": []}]}, expected)
+    assert runner.address(TASK, 8080) is None  # no network interface yet
+    eni = {"details": [{"name": "privateIPv4Address", "value": "10.0.1.23"}]}
+    stub.add_response("describe_tasks", {"tasks": [{"attachments": [eni]}]}, expected)
+    assert runner.address(TASK, 8080) == "10.0.1.23:8080"
+    stub.add_response("stop_task", {}, {"cluster": "cluster", "task": TASK, "reason": ANY})
+    runner.stop(TASK)
+    stub.add_client_error("stop_task", "InvalidParameterException")
+    runner.stop(TASK)  # already gone: not an error
+
+
 def test_org_credentials_assume_the_run_role_with_an_org_tag(monkeypatch):
     calls = []
 
@@ -216,6 +277,14 @@ def test_org_credentials_assume_the_run_role_with_an_org_tag(monkeypatch):
     )  # full hour for runs
     assert storage.org_credentials(AWS, "other").access_key == "AK3"
     assert calls[2]["Tags"] == [{"Key": "org_id", "Value": "other"}]
+    assert "Policy" not in calls[0]
+
+    # Report apps get credentials that can read the org's prefix but not write to it.
+    storage.org_credentials(AWS, "acme", read_only=True)
+    policy = json.loads(calls[3]["Policy"])["Statement"][0]
+    assert policy["Action"] == ["s3:GetObject", "s3:ListBucket"]
+    assert calls[3]["Tags"] == [{"Key": "org_id", "Value": "acme"}]
+    assert storage.org_credentials(AWS, "acme").access_key == "AK2"  # never cached
 
 
 @pytest.fixture(scope="module")
@@ -361,6 +430,15 @@ def test_stack_run_template_is_locked_down(template):
     ]
     timeout = next(c for c in run["ContainerDefinitions"] if c["Name"] == "timeout")
     assert "exit 124" in timeout["Command"][-1]
+
+
+def test_stack_report_apps_accept_only_the_control_plane(template):
+    ingress = _resources(template, "AWS::EC2::SecurityGroupIngress")
+    (rule,) = [r for r in ingress if "ReportSecurityGroup" in str(r["GroupId"])]
+    assert (rule["FromPort"], rule["ToPort"]) == (8080, 8080)
+    assert "ControlPlaneServiceSecurityGroup" in str(rule["SourceSecurityGroupId"])
+    run_rules = [r for r in ingress if "RunSecurityGroup" in str(r["GroupId"])]
+    assert run_rules == []  # pipeline runs still accept nothing
 
 
 def test_stack_shape(template):

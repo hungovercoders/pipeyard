@@ -1,5 +1,6 @@
 """S3 access for the control plane. Keys come from contract.py, so every call is org-scoped."""
 
+import json
 import time
 from dataclasses import dataclass
 
@@ -20,7 +21,19 @@ class Credentials:
 _cache: dict[str, tuple[float, Credentials]] = {}
 
 
-def org_credentials(settings: Settings, org_id: str, *, fresh: bool = False) -> Credentials:
+READ_ONLY_POLICY = json.dumps(
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {"Effect": "Allow", "Action": ["s3:GetObject", "s3:ListBucket"], "Resource": "*"}
+        ],
+    }
+)
+
+
+def org_credentials(
+    settings: Settings, org_id: str, *, fresh: bool = False, read_only: bool = False
+) -> Credentials:
     """Credentials that can only touch ``orgs/{org_id}/``.
 
     AWS: assume the run role with an ``org_id`` session tag; its policy is ABAC on
@@ -28,21 +41,27 @@ def org_credentials(settings: Settings, org_id: str, *, fresh: bool = False) -> 
     so IAM enforces the org boundary even if application code gets it wrong.
     Local: the emulator accepts any credentials (no IAM to scope with).
 
-    ``fresh=True`` skips the cache so a run container gets the full hour.
+    ``fresh=True`` skips the cache so a container gets the full hour. ``read_only=True``
+    (report apps) adds a session policy, so the credentials can read the org's prefix but
+    not write to it; it implies ``fresh``.
     """
     if not settings.is_aws:
         return Credentials(settings.s3_access_key, settings.s3_secret_key)
     cached = _cache.get(org_id)
-    if cached and not fresh and cached[0] > time.time():
+    if cached and not fresh and not read_only and cached[0] > time.time():
         return cached[1]
-    raw = boto3.client("sts", region_name=settings.region).assume_role(
-        RoleArn=settings.run_role_arn,
-        RoleSessionName=f"org-{org_id}",
-        Tags=[{"Key": "org_id", "Value": org_id}],
-        DurationSeconds=3600,  # the maximum when one role assumes another
-    )["Credentials"]
+    request = {
+        "RoleArn": settings.run_role_arn,
+        "RoleSessionName": f"org-{org_id}",
+        "Tags": [{"Key": "org_id", "Value": org_id}],
+        "DurationSeconds": 3600,  # the maximum when one role assumes another
+    }
+    if read_only:
+        request["Policy"] = READ_ONLY_POLICY
+    raw = boto3.client("sts", region_name=settings.region).assume_role(**request)["Credentials"]
     creds = Credentials(raw["AccessKeyId"], raw["SecretAccessKey"], raw["SessionToken"])
-    _cache[org_id] = (time.time() + 3000, creds)
+    if not read_only:
+        _cache[org_id] = (time.time() + 3000, creds)
     return creds
 
 
@@ -168,3 +187,21 @@ class Storage:
             if any(o["Key"].endswith(".parquet") for o in page.get("Contents", [])):
                 return True
         return False
+
+    def delete_output(self, org_id: str, dataset: str, run_id: str) -> None:
+        """Remove what a failed run left behind, so readers of the dataset never see it."""
+        prefix = contract.output_prefix(org_id, dataset, run_id)
+        s3 = self._s3(org_id)
+        for page in s3.get_paginator("list_objects_v2").paginate(Bucket=self.bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                s3.delete_object(Bucket=self.bucket, Key=obj["Key"])
+
+    # report apps
+
+    def put_report_app(self, app: contract.ReportApp) -> None:
+        key = contract.report_app_key(app.org_id, app.pipeline, app.slug)
+        self._put(app.org_id, key, app.model_dump_json(), "application/json")
+
+    def get_report_app(self, org_id: str, pipeline: str, slug: str) -> contract.ReportApp | None:
+        text = self._get(org_id, contract.report_app_key(org_id, pipeline, slug))
+        return contract.ReportApp.model_validate_json(text) if text is not None else None

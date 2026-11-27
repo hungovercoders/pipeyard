@@ -1,15 +1,13 @@
 """DuckDB over S3. Every connection is in-memory, short-lived and bound to one org.
 
-Three things keep a connection inside ``orgs/{org_id}/``:
+These keep a connection inside ``orgs/{org_id}/``:
   1. its S3 secret is scoped to that prefix (and in AWS the credentials themselves are),
   2. after setup, external access is disabled except for that prefix and config is locked,
-  3. report SQL is validated as a single SELECT before it runs.
+  3. it only ever runs queries written in this module: there is no tenant SQL.
 """
 
-import math
 import os
 import re
-from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import duckdb
@@ -17,8 +15,6 @@ import duckdb
 from . import contract
 from .config import Settings
 from .storage import org_credentials
-
-MAX_ROWS = 5000
 
 RUN_COLUMNS = {
     "run_id": "VARCHAR",
@@ -37,17 +33,6 @@ MANIFEST_COLUMNS = {
     "schema": "STRUCT(name VARCHAR, type VARCHAR)[]",
     "created_at": "TIMESTAMPTZ",
 }
-
-
-@dataclass
-class Result:
-    columns: list[str]
-    types: list[str]
-    rows: list[tuple]
-    truncated: bool = False
-
-    def dicts(self) -> list[dict]:
-        return [dict(zip(self.columns, r, strict=True)) for r in self.rows]
 
 
 def install_extensions() -> None:
@@ -159,51 +144,3 @@ def list_datasets(settings: Settings, org_id: str, runs: list[dict]) -> list[dic
             if manifests and manifests[0]["schema"]:
                 d["schema"] = manifests[0]["schema"]
     return sorted(datasets.values(), key=lambda d: d["dataset"])
-
-
-def _clean(value):
-    """Make a DuckDB value JSON-safe: NaN/infinity become null, bytes become hex text."""
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    if isinstance(value, bytes | bytearray):
-        return "\\x" + bytes(value).hex()
-    if isinstance(value, list | tuple):
-        return [_clean(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _clean(v) for k, v in value.items()}
-    return value
-
-
-def run_report(
-    settings: Settings, org_id: str, report: contract.Report, runs: list[dict]
-) -> Result:
-    """Runs a report defined in pipeline.yaml. This is the only path that executes tenant SQL.
-
-    Each dataset in the org becomes a view named after it, reading only the directories of
-    runs that settled as succeeded. ``{{dataset}}`` is the report's own.
-    """
-    contract.check_report_sql(report.sql)
-    con, root = _connect(settings, org_id)
-    with con:
-        runs_by_dataset: dict[str, list[str]] = {}
-        for r in _committed(runs):
-            runs_by_dataset.setdefault(r["dataset"], []).append(r["run_id"])
-        if report.dataset not in runs_by_dataset:
-            raise LookupError(f"dataset '{report.dataset}' has no successful runs yet")
-        for dataset, run_ids in runs_by_dataset.items():
-            globs = ", ".join(
-                _lit(f"{root}datasets/{dataset}/run={run_id}/*.parquet") for run_id in run_ids
-            )
-            con.execute(
-                f'CREATE VIEW "{dataset}" AS SELECT * FROM read_parquet([{globs}], '
-                "hive_partitioning = true, union_by_name = true)"
-            )
-        sql = contract.DATASET_PLACEHOLDER.sub(f'"{report.dataset}"', report.sql)
-        cur = con.execute(sql)
-        rows = cur.fetchmany(MAX_ROWS + 1)
-        return Result(
-            columns=[d[0] for d in cur.description],
-            types=[str(d[1]) for d in cur.description],
-            rows=[tuple(_clean(v) for v in row) for row in rows[:MAX_ROWS]],
-            truncated=len(rows) > MAX_ROWS,
-        )
