@@ -60,6 +60,7 @@ class Storage:
                 aws_access_key_id=settings.s3_access_key,
                 aws_secret_access_key=settings.s3_secret_key,
                 region_name=settings.region,
+                verify=settings.s3_ca_bundle or None,
             )
 
     def _s3(self, org_id: str):

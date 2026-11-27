@@ -12,7 +12,7 @@ def test_demo_flow(client, runner, org, example_yaml):
     env = runner.started[0]["env"]
     assert env["ORG_ID"] == org and env["RUN_ID"] == run["run_id"]
     assert env["OUTPUT_URI"].endswith(f"/orgs/{org}/datasets/transactions/run={run['run_id']}/")
-    assert env["AWS_ENDPOINT_URL"] == "http://aws:5000"
+    assert env["AWS_ENDPOINT_URL"] == "https://127.0.0.1:9297"
 
     run = client.get(f"/api/runs/{run['run_id']}").json()
     assert run["status"] == "succeeded" and run["row_count"] == 30

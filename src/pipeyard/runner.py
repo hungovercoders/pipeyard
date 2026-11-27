@@ -9,6 +9,7 @@ import os
 import subprocess
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 import boto3
@@ -35,10 +36,13 @@ class Runner(Protocol):
 
 
 class DockerRunner:
-    """Local mode: ``docker run`` on the compose network, where the AWS emulator lives."""
+    """Local mode: ``docker run`` in the AWS Emulator's network namespace."""
+
+    CA_PATH = "/etc/pipeyard/emulator-ca.pem"
 
     def __init__(self, settings: Settings):
         self.network = settings.docker_network
+        self.ca_bundle = settings.s3_ca_bundle
 
     def start(self, spec: PipelineSpec, org_id: str, run_id: str, env: dict[str, str]) -> str:
         name = f"pipeyard-{run_id}"
@@ -66,6 +70,16 @@ class DockerRunner:
             "--label",
             f"pipeyard.run_id={run_id}",
         ]
+        if self.ca_bundle:
+            # Let the container's AWS SDK trust the emulator's certificate. The emulator
+            # writes it owner-only and rewrites it at each start, so mount a fresh
+            # world-readable copy (it is a public certificate).
+            source = Path(self.ca_bundle).resolve()
+            copy = source.parent / "ca-for-runs.pem"
+            copy.write_bytes(source.read_bytes())
+            copy.chmod(0o644)
+            cmd += ["--volume", f"{copy}:{self.CA_PATH}:ro"]
+            env = {**env, "AWS_CA_BUNDLE": self.CA_PATH}
         for key in env:
             cmd += ["--env", key]  # values come from the subprocess env, not the command line
         cmd.append(spec.image)

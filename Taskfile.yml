@@ -16,17 +16,22 @@ tasks:
     cmds: [uv sync]
 
   emulator:
-    desc: Start the local AWS emulator (moto server, used for S3) in the background
-    cmds: [docker compose up -d --wait aws]
+    desc: Build and start the AWS Emulator (used for local S3) in the background
+    env:
+      UID_GID:
+        sh: echo "$(id -u):$(id -g)"
+    cmds:
+      - mkdir -p .emulator
+      - docker compose up -d --wait aws
 
   up:
-    desc: Start the AWS emulator and the control plane on http://localhost:8000
+    desc: Start the AWS Emulator and the control plane on http://localhost:8000
     deps: [setup, emulator]
     cmds:
       - uv run uvicorn --factory pipeyard.app:create_app --host 127.0.0.1 --port 8000
 
   down:
-    desc: Stop the AWS emulator (its data is in memory, so this clears it)
+    desc: Stop the AWS Emulator (its data is in memory, so this clears it)
     cmds: [docker compose down]
 
   build-example:
@@ -52,7 +57,7 @@ tasks:
       - uv run ruff check --fix .
 
   test:
-    desc: Run the tests (they use the AWS emulator as their S3)
+    desc: Run the tests (they use the AWS Emulator as their S3)
     deps: [emulator]
     cmds: ["uv run pytest {{.CLI_ARGS}}"]
 

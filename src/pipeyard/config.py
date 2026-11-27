@@ -17,18 +17,23 @@ class Settings:
 
     # local mode
     s3_endpoint_url: str = field(
-        default_factory=lambda: _env("PIPEYARD_S3_ENDPOINT_URL", "http://localhost:4566")
+        default_factory=lambda: _env("PIPEYARD_S3_ENDPOINT_URL", "https://127.0.0.1:9297")
     )
     s3_access_key: str = field(default_factory=lambda: _env("PIPEYARD_S3_ACCESS_KEY", "pipeyard"))
     s3_secret_key: str = field(
         default_factory=lambda: _env("PIPEYARD_S3_SECRET_KEY", "pipeyard-secret")
     )
-    # How run containers reach the emulator: they join the compose network and use its DNS name.
+    # The emulator's certificate, rewritten each time it starts. Empty = system trust store.
+    s3_ca_bundle: str = field(
+        default_factory=lambda: _env("PIPEYARD_S3_CA_BUNDLE", ".emulator/9297/ca.pem")
+    )
+    # How run containers reach the emulator. Its certificate only covers 127.0.0.1, so they
+    # share its network namespace and use the same URL as the host does.
     docker_network: str = field(
-        default_factory=lambda: _env("PIPEYARD_DOCKER_NETWORK", "pipeyard_default")
+        default_factory=lambda: _env("PIPEYARD_DOCKER_NETWORK", "container:pipeyard-aws")
     )
     runner_s3_endpoint_url: str = field(
-        default_factory=lambda: _env("PIPEYARD_RUNNER_S3_ENDPOINT_URL", "http://aws:5000")
+        default_factory=lambda: _env("PIPEYARD_RUNNER_S3_ENDPOINT_URL", "https://127.0.0.1:9297")
     )
     dev_org_id: str = field(default_factory=lambda: _env("PIPEYARD_DEV_ORG_ID", "demo"))
     dev_secret: str = field(

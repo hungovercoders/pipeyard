@@ -21,7 +21,7 @@ flowchart LR
     end
     idp[(Cognito / dev stub)]
     task[[Your container<br/>ORG_ID, RUN_ID, OUTPUT_URI]]
-    s3[(S3 / local emulator<br/>orgs/org_id/pipelines<br/>orgs/org_id/runs<br/>orgs/org_id/datasets)]
+    s3[(S3 / AWS Emulator<br/>orgs/org_id/pipelines<br/>orgs/org_id/runs<br/>orgs/org_id/datasets)]
 
     user -- token --> api
     api --> auth -. verifies .-> idp
@@ -58,11 +58,21 @@ pipeline's runs and trigger button, the datasets list and both reports (table + 
 
 In local mode you are signed in automatically as org `demo`.
 
-Local S3 is [moto server](https://docs.getmoto.org/en/latest/docs/server_mode.html), an
-open-source emulator of the AWS APIs, on <http://localhost:4566>. Any credentials work,
-for example `AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x aws --endpoint-url
-http://localhost:4566 s3 ls --recursive s3://pipeyard/`. Its state is **in memory**:
-`task down` or a restart of the emulator clears every pipeline, run and dataset.
+Local S3 is the [AWS Emulator](https://github.com/aws/aws-emulator), AWS's own local
+emulator of its APIs. AWS ships it as a package rather than a container image, so
+`emulator/Dockerfile` builds one from the official package the first time you run `task up`
+(a download of about 200 MB). Things to know:
+
+- It serves **HTTPS on `https://127.0.0.1:9297`** with a certificate it creates at each
+  start and writes to `.emulator/9297/ca.pem`. To poke at it with the AWS CLI:
+  `AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x AWS_CA_BUNDLE=.emulator/9297/ca.pem aws
+  --endpoint-url https://127.0.0.1:9297 s3 ls --recursive s3://pipeyard/`
+- That certificate is only valid for `localhost` and `127.0.0.1`, so run containers share
+  the emulator's network namespace instead of calling it by service name.
+- Its state is **in memory**. `task down` or a restart clears every pipeline, run and
+  dataset, and issues a new certificate, so restart `task up` as well.
+- The emulator reports usage telemetry to AWS by default. pipeyard starts it with
+  `--telemetry off`, and with `--auth off` so any credentials are accepted.
 
 | Task | What it does |
 |---|---|
@@ -72,9 +82,7 @@ http://localhost:4566 s3 ls --recursive s3://pipeyard/`. Its state is **in memor
 | `task lint` / `task fmt` | Ruff |
 | `task synth` / `task deploy` | CloudFormation template / deploy to AWS |
 
-> **Why moto and not LocalStack?** The LocalStack image now exits at start-up without a
-> `LOCALSTACK_AUTH_TOKEN`. To use it anyway, set `AWS_EMULATOR_IMAGE` and adjust the port
-> mapping in `docker-compose.yml`. If Docker Hub rate-limits the Python base image, run `BASE_IMAGE=public.ecr.aws/docker/library/python:3.12-slim task demo`.
+> If Docker Hub rate-limits the Python base image, run `BASE_IMAGE=public.ecr.aws/docker/library/python:3.12-slim task demo`.
 
 ## Writing a pipeline
 

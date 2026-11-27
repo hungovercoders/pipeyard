@@ -6,6 +6,7 @@ Three things keep a connection inside ``orgs/{org_id}/``:
   3. report SQL is validated as a single SELECT before it runs.
 """
 
+import os
 import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -79,6 +80,13 @@ def _connect(settings: Settings, org_id: str) -> tuple[duckdb.DuckDBPyConnection
             "URL_STYLE 'path'",
             f"USE_SSL {'true' if endpoint.scheme == 'https' else 'false'}",
         ]
+    if not settings.is_aws and settings.s3_ca_bundle:
+        # Trust the local emulator's certificate. The file is a public certificate and the
+        # only local path the sandbox may read.
+        ca = os.path.abspath(settings.s3_ca_bundle)
+        con.execute(f"SET ca_cert_file = {_lit(ca)}")
+        con.execute("SET enable_server_cert_verification = true")
+        con.execute(f"SET allowed_paths = [{_lit(ca)}]")
     con.execute(f"CREATE SECRET org_s3 ({', '.join(parts)})")
     con.execute(f"SET allowed_directories = [{_lit(root)}]")
     con.execute("SET enable_external_access = false")
