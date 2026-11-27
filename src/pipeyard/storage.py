@@ -205,3 +205,28 @@ class Storage:
     def get_report_app(self, org_id: str, pipeline: str, slug: str) -> contract.ReportApp | None:
         text = self._get(org_id, contract.report_app_key(org_id, pipeline, slug))
         return contract.ReportApp.model_validate_json(text) if text is not None else None
+
+    # data contracts (ODCS documents, stored exactly as registered)
+
+    def put_data_contract(self, org_id: str, dataset: str, text: str) -> None:
+        self._put(org_id, contract.data_contract_key(org_id, dataset), text, "application/yaml")
+
+    def get_data_contract(self, org_id: str, dataset: str) -> str | None:
+        return self._get(org_id, contract.data_contract_key(org_id, dataset))
+
+    def delete_data_contract(self, org_id: str, dataset: str) -> None:
+        key = contract.data_contract_key(org_id, dataset)
+        self._s3(org_id).delete_object(Bucket=self.bucket, Key=key)
+
+    def list_data_contracts(self, org_id: str) -> list[str]:
+        """Names of the datasets that have a contract."""
+        prefix, suffix = contract.data_contracts_prefix(org_id), ".odcs.yaml"
+        s3 = self._s3(org_id)
+        return sorted(
+            obj["Key"][len(prefix) : -len(suffix)]
+            for page in s3.get_paginator("list_objects_v2").paginate(
+                Bucket=self.bucket, Prefix=prefix
+            )
+            for obj in page.get("Contents", [])
+            if obj["Key"].endswith(suffix)
+        )

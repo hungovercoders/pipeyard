@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Data contract · {{ dataset }} · pipeyard{% endblock %}
+{% block main %}
+<div class="crumb"><a href="/datasets">Datasets</a> / <a href="/datasets/{{ dataset }}">{{ dataset }}</a> /</div>
+<h1>Data contract for {{ dataset }}</h1>
+<p class="sub">An <a href="https://bitol-io.github.io/open-data-contract-standard/latest/" target="_blank" rel="noopener">Open Data Contract Standard</a>
+  (ODCS v3) document. pipeyard enforces its schema on every run from now on; runs already in the dataset are not rechecked.</p>
+{% if errors %}
+<div class="card errors" role="alert">
+  <strong>Not saved. Fix {{ "this" if errors | length == 1 else "these" }} and try again:</strong>
+  <ul>{% for e in errors %}<li class="mono">{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+<form method="post" action="/datasets/{{ dataset }}/contract">
+  <div class="card"><textarea name="yaml" aria-label="ODCS data contract" spellcheck="false" required>{{ yaml_text }}</textarea></div>
+  <p class="actions" style="margin-top: 14px">
+    <button>Save contract</button>
+    <a class="button quiet" href="/datasets/{{ dataset }}">Cancel</a>
+  </p>
+</form>
+<p class="sub">The contract must contain a <code>schema</code> object named <code>{{ dataset }}</code>. Checked per column:
+  it exists, its type matches <code>physicalType</code> (or else <code>logicalType</code>), and it has no nulls if <code>required: true</code>.
+  Everything else in the document is stored and kept, but not enforced yet.</p>
+{% endblock %}

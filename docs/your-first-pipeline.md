@@ -1,6 +1,6 @@
 # Your first pipeline
 
-In about fifteen minutes you will build a container that produces data, register it with
+In about twenty minutes you will build a container that produces data, register it with
 pipeyard and run it. Then you will build a second container, a small dashboard, and let
 pipeyard serve it. Finally you will break things on purpose, because knowing what failure
 looks like is half of trusting a tool.
@@ -269,6 +269,29 @@ Put the `put_object` call back and rebuild, and you are in working order again.
 such as `coffee-orders-report:nope`, save, and open the report. Instead of a dashboard you
 get the reason it could not start. Change it back and it works again.
 
+## 8. Make a promise about the data
+
+Your dashboard assumes `orders` has a `drink` and a `price`. Nothing guarantees that yet.
+A data contract does.
+
+Open **Datasets**, click **orders**, and press **Add a data contract**. pipeyard has
+drafted one from the columns your runs produced, in the
+[Open Data Contract Standard](data-contracts.md). Change `required: false` to
+`required: true` on `order_id` and `price`, and press **Save contract**. The dataset page
+now shows the contract, and **Trigger run** on the pipeline still succeeds: your pipeline
+keeps its promise.
+
+Now break the promise. In `generate.py`, change `as price` to `as cost`, rebuild with
+`docker build -t coffee-orders:latest .`, and trigger a run. It fails:
+
+```
+data contract 'orders' version 1.0.0 is not met:
+- column 'price' is missing
+```
+
+and the dashboard, which would have crashed on the missing column, carries on showing the
+good data. Change `cost` back to `price` and rebuild.
+
 ## What you just learned
 
 - A pipeline is a container plus a `pipeline.yaml`. The container's whole job is: write
@@ -278,6 +301,7 @@ get the reason it could not start. Change it back and it works again.
   and reads the dataset at `INPUT_URI`.
 - pipeyard starts a report when it is opened, keeps it behind sign-in, and stops it when
   nobody is using it.
+- A data contract turns "the columns I hope are there" into something every run must meet.
 
 ## Where next
 

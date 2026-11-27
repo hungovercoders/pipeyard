@@ -8,7 +8,7 @@ local stand-in for S3. No AWS account is needed.
 | Command | What it does |
 |---|---|
 | `task up` | Starts the local S3 emulator and pipeyard on <http://localhost:8000>. Leave it running. |
-| `task demo` | Builds the example images, registers the pipeline, runs it and starts its report |
+| `task demo` | Builds the example images, registers the pipeline and its data contract, runs it and starts its report |
 | `task down` | Stops the emulator. This also deletes all local data. |
 | `task test` | Runs the tests. Add pytest arguments after `--`, e.g. `task test -- -k timeout`. |
 | `task lint` | Ruff lint and format check |
@@ -66,7 +66,7 @@ the proxy while debugging, at the path in its `BASE_PATH`.
 
 ## Tests
 
-`task test` starts the emulator and runs about 110 tests against it. They use the real app
+`task test` starts the emulator and runs about 180 tests against it. They use the real app
 and real S3 calls, with a fake runner in place of Docker and a tiny stand-in web server in
 place of a report container, so they finish in seconds. Only `task demo` exercises real
 containers.
@@ -77,6 +77,7 @@ Actions (`.github/workflows/ci.yml`).
 | File | What it covers |
 |---|---|
 | `tests/test_local_loop.py` | The main flow: register, run, datasets, UI pages, the register form |
+| `tests/test_datacontracts.py` | ODCS data contracts: registering, type matching, runs that break one |
 | `tests/test_reports.py` | Report apps: start, stop, expiry, the HTTP and WebSocket proxy, what is never forwarded |
 | `tests/test_org_scoping.py` | One org cannot see or reach another's data; bad tokens; path tricks |
 | `tests/test_contract.py` | `pipeline.yaml` and manifest validation, and the error messages |

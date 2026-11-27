@@ -2,19 +2,19 @@
 {% block title %}Datasets · pipeyard{% endblock %}
 {% block main %}
 <h1>Datasets</h1>
-<p class="sub">Built from the <code>_manifest.json</code> of each committed run. Reports read every committed run of a dataset.</p>
+<p class="sub">Every successful run adds to its dataset. A dataset with a data contract only accepts runs that meet it.</p>
 <div class="card scroll">
   {% if datasets %}
   <table>
-    <tr><th>Dataset</th><th class="num">Runs</th><th class="num">Rows</th><th>Updated (UTC)</th><th>Produced by</th><th>Schema (latest run)</th></tr>
+    <tr><th>Dataset</th><th class="num">Runs</th><th class="num">Rows</th><th>Updated (UTC)</th><th>Produced by</th><th>Data contract</th></tr>
     {% for d in datasets %}
     <tr>
-      <td class="mono">{{ d.dataset }}</td>
+      <td class="mono"><a href="/datasets/{{ d.dataset }}">{{ d.dataset }}</a></td>
       <td class="num">{{ d.runs }}</td>
       <td class="num">{{ "{:,}".format(d.row_count) }}</td>
       <td>{{ d.updated_at.strftime("%Y-%m-%d %H:%M:%S") if d.updated_at else "–" }}</td>
       <td>{% for p in producers.get(d.dataset, []) %}<a href="/pipelines/{{ p.name }}">{{ p.name }}</a>{{ ", " if not loop.last }}{% else %}–{% endfor %}</td>
-      <td class="wrap"><div class="chips">{% for c in d.schema %}<span class="chip mono">{{ c.name }} <span>{{ c.type }}</span></span>{% endfor %}</div></td>
+      <td>{% if d.contract %}{{ d.contract.name }} <span class="chip mono">v{{ d.contract.version }}</span>{% else %}<span class="sub">none</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </table>

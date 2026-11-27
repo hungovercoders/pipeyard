@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}{{ dataset.dataset }} · pipeyard{% endblock %}
+{% block main %}
+<div class="crumb"><a href="/datasets">Datasets</a> /</div>
+<div class="row">
+  <div><h1>{{ dataset.dataset }}</h1>
+  <p class="sub">{{ dataset.runs }} successful run{{ "" if dataset.runs == 1 else "s" }} · {{ "{:,}".format(dataset.row_count) }} rows</p></div>
+  <a class="button{{ " quiet" if dataset.contract }}" href="/datasets/{{ dataset.dataset }}/contract">{{ "Edit contract" if dataset.contract else "Add a data contract" }}</a>
+</div>
+
+<h2>Data contract</h2>
+{% if dataset.contract %}
+{% set c = dataset.contract %}
+<dl class="card facts">
+  <div><dt>Name</dt><dd>{{ c.name }}</dd></div>
+  <div><dt>Version</dt><dd class="mono">{{ c.version }}</dd></div>
+  {% if c.status %}<div><dt>Status</dt><dd>{{ c.status }}</dd></div>{% endif %}
+  <div><dt>Standard</dt><dd>ODCS <span class="mono">{{ c.api_version }}</span></dd></div>
+</dl>
+{% if c.purpose %}<p class="sub" style="margin-top: 12px">{{ c.purpose }}</p>{% endif %}
+<div class="card scroll" style="margin-top: 12px">
+  <table>
+    <tr><th>Column</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    {% for p in c.properties %}
+    <tr>
+      <td class="mono">{{ p.name }}</td>
+      <td class="mono">{{ p.type }}</td>
+      <td>{{ "yes" if p.required else "" }}</td>
+      <td class="wrap">{{ p.description or "" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+<p class="sub" style="margin-top: 10px">Each run is checked against this when it finishes: every column must be present with a
+  matching type, and required columns must have no nulls. A run that does not conform fails and adds nothing.</p>
+{% else %}
+<div class="card empty">
+  <p>No data contract. Runs are accepted whatever columns they contain.</p>
+  <a class="button" href="/datasets/{{ dataset.dataset }}/contract">Add a data contract</a>
+</div>
+{% endif %}
+
+{% if dataset.schema %}
+<h2>Columns in the latest successful run</h2>
+<div class="card" style="padding: 12px 14px"><div class="chips">{% for col in dataset.schema %}<span class="chip mono">{{ col.name }} <span>{{ col.type }}</span></span>{% endfor %}</div></div>
+{% endif %}
+
+<h2>Recent runs</h2>
+<div class="card scroll">
+  {% if runs %}
+  <table>
+    <tr><th>Run</th><th>Pipeline</th><th>Status</th><th>Started (UTC)</th><th class="num">Rows</th></tr>
+    {% for r in runs %}
+    <tr>
+      <td class="mono">{{ r.run_id }}</td>
+      <td><a href="/pipelines/{{ r.pipeline }}">{{ r.pipeline }}</a></td>
+      <td class="wrap"><span class="status {{ r.status }}">{{ r.status }}</span>
+        {% if r.error %}<div class="err mono">{{ r.error }}</div>{% endif %}</td>
+      <td>{{ r.started_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+      <td class="num">{{ "{:,}".format(r.row_count) if r.row_count is not none else "–" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty">No runs have written to this dataset yet.</div>{% endif %}
+</div>
+{% endblock %}

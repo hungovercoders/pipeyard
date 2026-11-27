@@ -140,6 +140,7 @@ class RunRecord(BaseModel):
     finished_at: datetime | None = None
     row_count: int | None = None
     error: str | None = None
+    contract_version: str | None = None  # the data contract version it was checked against
 
 
 class ReportApp(BaseModel):
@@ -241,3 +242,11 @@ def output_prefix(org_id: str, dataset: str, run_id: str) -> str:
 
 def report_app_key(org_id: str, pipeline: str, slug: str) -> str:
     return f"{org_prefix(org_id)}reports/{pipeline}/{slug}.json"
+
+
+def data_contracts_prefix(org_id: str) -> str:
+    return f"{org_prefix(org_id)}contracts/"
+
+
+def data_contract_key(org_id: str, dataset: str) -> str:
+    return f"{data_contracts_prefix(org_id)}{dataset}.odcs.yaml"

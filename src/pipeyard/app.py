@@ -17,10 +17,10 @@ from urllib.parse import parse_qs, quote
 import httpx
 from fastapi import Body, Depends, FastAPI, HTTPException, Path, Request, WebSocket
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from . import contract, proxy, query
+from . import contract, datacontract, proxy, query
 from .auth import COOKIE, Auth, AuthError
 from .config import Settings
 from .contract import ContractError, PipelineSpec, Report, ReportApp, RunRecord
@@ -28,6 +28,7 @@ from .runner import TIMEOUT_EXIT_CODE, Job, Runner, make_runner
 from .storage import Storage, org_credentials
 
 PipelineName = Annotated[str, Path(pattern=contract.PIPELINE_NAME)]
+DatasetName = Annotated[str, Path(pattern=contract.DATASET_NAME)]
 RunId = Annotated[str, Path(pattern=contract.RUN_ID_RE.pattern)]
 SLUG = r"^[a-z0-9-]{1,80}$"
 Slug = Annotated[str, Path(pattern=SLUG)]
@@ -186,11 +187,41 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
 
     # --- operations (shared by API and UI) --------------------------------------------
 
+    def save_contract(org_id: str, dataset: str, text: str) -> datacontract.DataContract:
+        try:
+            dc = datacontract.parse(text, dataset)
+        except ContractError as e:
+            raise HTTPException(422, e.errors) from e
+        storage.put_data_contract(org_id, dataset, text)
+        return dc
+
     def get_pipeline(org_id: str, name: str) -> PipelineSpec:
         spec = storage.get_pipeline(org_id, name)
         if spec is None:
             raise HTTPException(404, f"pipeline '{name}' not found")
         return spec
+
+    def load_data_contract(org_id: str, dataset: str) -> datacontract.DataContract | None:
+        text = storage.get_data_contract(org_id, dataset)
+        return datacontract.parse(text, dataset) if text is not None else None
+
+    def contract_problem(run: RunRecord) -> str | None:
+        """If the run's dataset has a data contract, check what the run wrote against it."""
+        dc = load_data_contract(run.org_id, run.dataset)
+        if dc is None:
+            return None
+        run.contract_version = dc.version
+        required = [p.column for p in dc.table(run.dataset).properties if p.required]
+        try:
+            columns, nulls = query.describe_output(
+                settings, run.org_id, run.dataset, run.run_id, required
+            )
+        except query.duckdb.Error as e:
+            return f"could not read the run's Parquet files: {str(e).splitlines()[0]}"
+        problems = datacontract.violations(dc, run.dataset, columns, nulls)
+        if not problems:
+            return None
+        return f"data contract {dc.label} is not met:\n" + "\n".join(f"- {p}" for p in problems)
 
     def reconcile(run: RunRecord) -> RunRecord:
         """If a run is still marked running, ask the runner and settle the record."""
@@ -220,6 +251,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
                 try:
                     manifest = contract.parse_manifest(text, dataset=run.dataset, run_id=run.run_id)
                     run.row_count = manifest.row_count
+                    error = contract_problem(run)
                 except ContractError as e:
                     error = str(e)
         elif state.exit_code is None:
@@ -238,6 +270,43 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             storage.delete_output(run.org_id, run.dataset, run.run_id)
         runner.cleanup(run.handle)  # only after the outcome is saved
         return run
+
+    def contract_view(dataset: str, dc: datacontract.DataContract) -> dict:
+        return {
+            "dataset": dataset,
+            "id": dc.id,
+            "name": dc.name or dc.id,
+            "version": dc.version,
+            "status": dc.status,
+            "api_version": dc.apiVersion,
+            "purpose": dc.purpose,
+            "properties": [
+                {
+                    "name": p.column,
+                    "type": p.physicalType or p.logicalType or "",
+                    "logical_type": p.logicalType,
+                    "required": p.required,
+                    "description": p.description,
+                }
+                for p in dc.table(dataset).properties
+            ],
+        }
+
+    def list_datasets(org_id: str) -> list[dict]:
+        """Datasets with succeeded runs, plus any that so far only have a contract."""
+        listed = {d["dataset"]: d for d in query.list_datasets(settings, org_id, list_runs(org_id))}
+        for name in storage.list_data_contracts(org_id):
+            entry = listed.setdefault(
+                name,
+                {"dataset": name, "runs": 0, "row_count": 0, "schema": [], "updated_at": None},
+            )
+            try:
+                entry["contract"] = contract_view(name, load_data_contract(org_id, name))
+            except ContractError:
+                continue  # stored before a rule tightened: show the dataset without it
+        for entry in listed.values():
+            entry.setdefault("contract", None)
+        return sorted(listed.values(), key=lambda d: d["dataset"])
 
     def list_runs(org_id: str, pipeline: str | None = None) -> list[dict]:
         runs = query.list_runs(settings, org_id, pipeline)
@@ -542,7 +611,27 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
 
     @app.get("/api/datasets")
     def api_datasets(org_id: Org):
-        return query.list_datasets(settings, org_id, list_runs(org_id))
+        return list_datasets(org_id)
+
+    @app.get("/api/datasets/{dataset}/contract")
+    def api_get_contract(org_id: Org, dataset: DatasetName):
+        text = storage.get_data_contract(org_id, dataset)
+        if text is None:
+            raise HTTPException(404, f"dataset '{dataset}' has no data contract")
+        return PlainTextResponse(text, media_type="application/yaml")
+
+    @app.put("/api/datasets/{dataset}/contract")
+    def api_put_contract(
+        org_id: Org,
+        dataset: DatasetName,
+        body: Annotated[bytes, Body(media_type="application/yaml")],
+    ):
+        """Body is an ODCS v3 document. It applies to runs settled from now on."""
+        return contract_view(dataset, save_contract(org_id, dataset, body.decode(errors="replace")))
+
+    @app.delete("/api/datasets/{dataset}/contract", status_code=204)
+    def api_delete_contract(org_id: Org, dataset: DatasetName):
+        storage.delete_data_contract(org_id, dataset)
 
     @app.get("/api/pipelines/{name}/reports/{slug}")
     def api_report(org_id: Org, name: PipelineName, slug: Slug):
@@ -654,9 +743,43 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             "datasets.html",
             org_id,
             nav="datasets",
-            datasets=query.list_datasets(settings, org_id, list_runs(org_id)),
+            datasets=list_datasets(org_id),
             producers=producers,
         )
+
+    @app.get("/datasets/{dataset}", response_class=HTMLResponse)
+    def ui_dataset(request: Request, org_id: Org, dataset: DatasetName):
+        entry = next((d for d in list_datasets(org_id) if d["dataset"] == dataset), None)
+        if entry is None:
+            raise HTTPException(404, f"dataset '{dataset}' not found")
+        runs = [r for r in list_runs(org_id) if r["dataset"] == dataset]
+        return page(request, "dataset.html", org_id, nav="datasets", dataset=entry, runs=runs[:10])
+
+    @app.get("/datasets/{dataset}/contract", response_class=HTMLResponse)
+    def ui_contract_form(request: Request, org_id: Org, dataset: DatasetName):
+        text = storage.get_data_contract(org_id, dataset)
+        if text is None:  # offer a first draft written from what the dataset contains
+            listed = query.list_datasets(settings, org_id, list_runs(org_id))
+            observed = next((d["schema"] for d in listed if d["dataset"] == dataset), [])
+            text = datacontract.starter(dataset, observed)
+        return page(
+            request, "contract.html", org_id, nav="datasets", dataset=dataset, yaml_text=text,
+            errors=[],
+        )  # fmt: skip
+
+    @app.post("/datasets/{dataset}/contract", response_class=HTMLResponse)
+    def ui_contract_save(
+        request: Request, org_id: Org, dataset: DatasetName, body: Annotated[bytes, Body()]
+    ):
+        text = parse_qs(body.decode(errors="replace")).get("yaml", [""])[0].replace("\r\n", "\n")
+        try:
+            save_contract(org_id, dataset, text)
+        except HTTPException as e:
+            return page(
+                request, "contract.html", org_id, nav="datasets", dataset=dataset,
+                yaml_text=text, errors=e.detail, status_code=422,
+            )  # fmt: skip
+        return RedirectResponse(f"/datasets/{dataset}", status_code=303)
 
     def report_page(request: Request, org_id: str, template: str, spec, report, app_):
         view = report_view(spec, report, app_)

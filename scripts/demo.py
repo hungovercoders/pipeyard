@@ -13,7 +13,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-PIPELINE = Path(__file__).parent.parent / "examples/pipelines/fake-transactions/pipeline.yaml"
+EXAMPLE = Path(__file__).parent.parent / "examples/pipelines/fake-transactions"
+PIPELINE = EXAMPLE / "pipeline.yaml"
+CONTRACT = EXAMPLE / "transactions.odcs.yaml"
 
 
 def call(url: str, token: str | None = None, method: str = "GET", body: bytes | None = None):
@@ -80,6 +82,13 @@ def main() -> None:
     name = spec["name"]
     print(f"registered pipeline '{name}' ({spec['image']})")
 
+    dataset = spec["outputs"][0]["dataset"]
+    contract = call(f"{url}/api/datasets/{dataset}/contract", token, "PUT", CONTRACT.read_bytes())
+    print(
+        f"registered data contract '{contract['name']}' v{contract['version']} "
+        f"({len(contract['properties'])} columns) for dataset '{dataset}'"
+    )
+
     run = call(f"{url}/api/pipelines/{name}/runs", token, "POST")
     print(f"triggered run {run['run_id']}", end="", flush=True)
     deadline = time.time() + spec["timeout_seconds"] + 120
@@ -110,7 +119,7 @@ def main() -> None:
         sys.exit(f"report did not start: {status['error']}")
     served = fetch(f"{url}{status['url']}", token)
     print(f"  the app answered through pipeyard's proxy ({len(served):,} bytes of HTML)")
-    print(f"  it stops by itself at {status['expires_at']}")
+    print(f"  it is stopped once unused for {status['idle_timeout_seconds']} seconds")
     print(f"\nopen {url}/pipelines/{name}/reports/{slug}")
 
 
