@@ -8,9 +8,10 @@ pipeyard runs both without making you learn a framework. Package each as a conta
 describe them in a dozen lines of YAML, and pipeyard will run the pipeline, keep every
 run's output as Parquet in S3, and serve your dashboard behind a sign-in.
 
-![Walkthrough: registering a pipeline, running it, and opening its Streamlit report](docs/demo.gif)
+![Walkthrough: registering a pipeline, running it, adding a data contract, and opening its Streamlit report](docs/demo.gif)
 
-Register a pipeline, trigger a run, open its report. The same walkthrough is available as a
+Register a pipeline, trigger a run, give the dataset a data contract, watch a run fail
+against a stricter one, then open the report. The same walkthrough is available as a
 sharper [video file](docs/demo.mp4) to download.
 
 ## How it works
