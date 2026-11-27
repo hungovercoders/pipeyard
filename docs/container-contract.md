@@ -1,11 +1,24 @@
 # The container contract
 
-A pipeyard pipeline is **a container image plus a `pipeline.yaml`**. pipeyard starts the
-container, tells it where to write, and afterwards checks what it wrote. Anything that can
-run in a container and write Parquet to S3 can be a pipeline.
+This is the reference for everything pipeyard expects from a pipeline. If you would rather
+learn by doing, start with [your first pipeline](your-first-pipeline.md) and come back
+here when you need a detail.
 
-The code that enforces this document is `src/pipeyard/contract.py` (models and S3 layout)
-and `reconcile()` in `src/pipeyard/app.py` (the success check).
+A pipeline is **a container image plus a `pipeline.yaml`**. pipeyard starts the container,
+tells it where to write, and afterwards checks what it wrote. Anything that can run in a
+container and write Parquet to S3 can be a pipeline.
+
+## The contract at a glance
+
+Your container must:
+
+- [ ] read `RUN_ID` and `OUTPUT_URI` from the environment
+- [ ] write one or more `*.parquet` files directly under `OUTPUT_URI`
+- [ ] then write `OUTPUT_URI/_manifest.json`
+- [ ] exit with code `0`
+- [ ] finish within `timeout_seconds`, writing only to `/tmp` on local disk
+
+Do all five and the run succeeds. Miss one and it fails with a message saying which.
 
 ## pipeline.yaml
 
@@ -28,8 +41,12 @@ reports:                           # optional
     chart: { type: line, x: day, y: total }   # optional; type: line | bar | area | point
 ```
 
-Rules checked at registration (`POST /api/pipelines`, errors come back as a list of
-`field: message` strings with HTTP 422):
+Only `name`, `image` and `outputs` are required. `cpu`, `memory` and `timeout_seconds`
+default to the values shown.
+
+Rules checked when you register, in the UI or with `POST /api/pipelines`. Errors come back
+as a list of `field: message` lines (HTTP 422 from the API), and nothing is saved until the
+YAML is valid:
 
 - Unknown keys are rejected.
 - `cpu`/`memory` must be a valid Fargate combination, in local mode too, so a pipeline
@@ -126,7 +143,7 @@ orgs/{org_id}/datasets/{dataset}/run={run_id}/*.parquet + _manifest.json
 ```
 
 `run={run_id}` is a Hive-style partition: reports see a `run` column and read **every
-committed run** of a dataset (append semantics). To report on the latest run only, filter
+succeeded run** of a dataset, so runs append. To report on the latest run only, filter
 on it, for example `where run = (select max(run) from {{dataset}})`.
 
 A run record (`runs/{run_id}.json`) looks like:
@@ -143,7 +160,12 @@ A run record (`runs/{run_id}.json`) looks like:
 
 `status` is `running`, `succeeded` or `failed`.
 
-## A minimal pipeline
+## Examples
 
-See `examples/pipelines/fake-transactions/`: about 50 lines of Python that generate rows
-with DuckDB into `/tmp`, upload the Parquet file with boto3, then write the manifest.
+- [Your first pipeline](your-first-pipeline.md) builds a complete one step by step.
+- `examples/pipelines/fake-transactions/` is the pipeline behind `task demo`: about 50
+  lines of Python that generate rows with DuckDB into `/tmp`, upload the Parquet file with
+  boto3, then write the manifest.
+
+The code that enforces this page is `src/pipeyard/contract.py` (the models and the S3
+layout) and `reconcile()` in `src/pipeyard/app.py` (the success check).

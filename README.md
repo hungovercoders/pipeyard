@@ -1,105 +1,32 @@
 # pipeyard
 
-Bring your own container, get a dataset and a report.
+**Bring a container. Get a dataset and a dashboard.**
 
-A pipeyard pipeline is a container image plus a `pipeline.yaml`. pipeyard runs the
-container, the container writes Parquet to S3, DuckDB queries it, and a small web UI shows
-the reports defined in the YAML.
-
-v0 is **single-tenant and deployed into your own AWS account**, but `org_id` is threaded
-through every S3 key, token claim, IAM session and API call, so serving several orgs from
-one deployment later is configuration rather than a rewrite.
-
-```mermaid
-flowchart LR
-    user([Browser / API client])
-    subgraph cp[Control plane: one FastAPI app]
-        api[JSON API + HTMX UI]
-        auth[auth: token to org_id]
-        query[DuckDB, sandboxed to the org prefix]
-        runner[Runner: Docker or Fargate RunTask]
-    end
-    idp[(Cognito / dev stub)]
-    task[[Your container<br/>ORG_ID, RUN_ID, OUTPUT_URI]]
-    s3[(S3 / AWS Emulator<br/>orgs/org_id/pipelines<br/>orgs/org_id/runs<br/>orgs/org_id/datasets)]
-
-    user -- token --> api
-    api --> auth -. verifies .-> idp
-    api --> runner -- starts --> task
-    task -- "Parquet + _manifest.json" --> s3
-    api -- "pipeline.yaml, run records" --> s3
-    api --> query -- "read_parquet / read_json" --> s3
-```
-
-There is no database. Pipelines, run records and manifests are objects in S3; lists are
-`read_json` over a prefix. There is no background worker either: a run's status is settled
-the next time someone reads it.
-
-## Demo
+You already have code that produces data: a scraper, an export job, a model that scores
+things. pipeyard turns it into a pipeline without making you learn a framework. Package the
+code as a container, describe it in a dozen lines of YAML, and pipeyard will run it, keep
+every run's output as Parquet in S3, and chart the results in a small web UI.
 
 [![The Daily volume report in the pipeyard UI](docs/demo.png)](docs/demo.mp4)
 
-**[Watch the 50-second walkthrough](docs/demo.mp4)**: register a pipeline from the UI,
-trigger a run, then view the dataset and both reports. Recorded against the local stack;
-the orange dot is a pointer added for the recording.
+**[Watch the 50-second walkthrough](docs/demo.mp4)**: register a pipeline, trigger a run,
+see the dataset and its reports.
 
-## Local quickstart (5 minutes)
+## How it works
 
-You need Docker and [mise](https://mise.jdx.dev) (or install Python 3.12, uv and
-[go-task](https://taskfile.dev) yourself).
+1. **You bring a container and a `pipeline.yaml`.** The YAML names the image, the dataset it
+   produces, and the SQL reports you want.
+2. **pipeyard runs it** (Docker on your laptop, Fargate in AWS) and tells it where to write.
+3. **Your container writes Parquet** to that location and exits.
+4. **pipeyard serves the results**: DuckDB runs your report SQL straight over the Parquet
+   files and the UI shows a table and a chart.
 
-```sh
-mise install        # python, uv, task, node, awscli, cdk at pinned versions
-task up             # AWS emulator + control plane on http://localhost:8000 (leave running)
-```
-
-In a second terminal:
-
-```sh
-task demo
-```
-
-`task demo` builds the example image, registers `examples/pipelines/fake-transactions`,
-triggers a run (about 10,000 fake transactions), waits for it, and prints the first rows of
-the "Daily volume" report. Then open <http://localhost:8000>: the pipelines list, the
-pipeline's runs and trigger button, the datasets list and both reports (table + chart).
-
-In local mode you are signed in automatically as org `demo`.
-
-Local S3 is the [AWS Emulator](https://github.com/aws/aws-emulator), AWS's own local
-emulator of its APIs. AWS ships it as a package rather than a container image, so
-`emulator/Dockerfile` builds one from the official package the first time you run `task up`
-(a download of about 200 MB). Things to know:
-
-- It serves **HTTPS on `https://127.0.0.1:9297`** with a certificate it creates at each
-  start and writes to `.emulator/9297/ca.pem`. To poke at it with the AWS CLI:
-  `AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x AWS_CA_BUNDLE=.emulator/9297/ca.pem aws
-  --endpoint-url https://127.0.0.1:9297 s3 ls --recursive s3://pipeyard/`
-- That certificate is only valid for `localhost` and `127.0.0.1`, so run containers share
-  the emulator's network namespace instead of calling it by service name.
-- Its state is **in memory**. `task down` or a restart clears every pipeline, run and
-  dataset, and issues a new certificate, so restart `task up` as well.
-- The emulator reports usage telemetry to AWS by default. pipeyard starts it with
-  `--telemetry off`, and with `--auth off` so any credentials are accepted.
-
-| Task | What it does |
-|---|---|
-| `task up` / `task down` | Start / stop the local stack |
-| `task demo` | The end-to-end example |
-| `task test` | Tests (they use the emulator as their S3, and a fake runner) |
-| `task lint` / `task fmt` | Ruff |
-| `task synth` / `task deploy` | CloudFormation template / deploy to AWS |
-
-> If Docker Hub rate-limits the Python base image, run `BASE_IMAGE=public.ecr.aws/docker/library/python:3.12-slim task demo`.
-
-## Writing a pipeline
+That is the whole product. There is no database, no scheduler and no SDK to import. Your
+container only needs to read three environment variables and write files to S3.
 
 ```yaml
 name: fake-transactions
-image: <ecr-or-local-image>
-cpu: 256
-memory: 512
-timeout_seconds: 600
+image: pipeyard-example-fake-transactions:latest
 outputs:
   - dataset: transactions
 reports:
@@ -111,130 +38,178 @@ reports:
     chart: { type: line, x: day, y: total }
 ```
 
-The container gets `ORG_ID`, `RUN_ID`, `OUTPUT_URI` (and `INPUT_URI` if it declares an
-input) plus standard `AWS_*` credentials. It must write Parquet files under `OUTPUT_URI`,
-then `_manifest.json`, then exit 0. Its root filesystem is read-only; `/tmp` is scratch.
-A non-zero exit, a missing or invalid manifest, or no Parquet means a failed run.
+## Try it in 5 minutes
 
-The full contract, including the manifest format and every failure message, is in
-[docs/container-contract.md](docs/container-contract.md).
-
-Register it in the UI with **Register pipeline** on the pipelines page (paste the YAML;
-validation errors are listed and nothing is saved until it is valid), or change an existing
-one with **Edit YAML** on its page. From scripts, use `POST /api/pipelines` (body: the YAML).
-The API:
-
-| Method and path | |
-|---|---|
-| `POST /api/pipelines` | Register or replace a pipeline (422 with a list of errors if invalid) |
-| `GET /api/pipelines`, `GET /api/pipelines/{name}` | |
-| `POST /api/pipelines/{name}/runs` | Trigger a run |
-| `GET /api/pipelines/{name}/runs`, `GET /api/runs/{run_id}` | |
-| `GET /api/datasets` | From manifests |
-| `GET /api/pipelines/{name}/reports/{slug}` | Run a report |
-
-Send `Authorization: Bearer <token>`. Locally, `POST /dev/token` issues one for org `demo`.
-
-## How orgs are kept apart
-
-- **The org comes from the token and nowhere else.** No route accepts an org in its path,
-  query or body. `contract.py` is the only place S3 keys are built and every helper starts
-  from `orgs/{org_id}/`.
-- **Report SQL is sandboxed.** v0 only runs SQL written in `pipeline.yaml`, and only a
-  single `SELECT`. Each query gets a fresh in-memory DuckDB whose S3 secret is scoped to
-  the org prefix, with external access disabled outside that prefix and configuration
-  locked. Datasets are exposed as views over committed runs.
-- **In AWS, IAM enforces it too.** There is one "run role" whose policy only allows
-  `orgs/${aws:PrincipalTag/org_id}/*`. The control plane assumes it with an `org_id`
-  session tag and uses those credentials for the run container, for DuckDB and for its own
-  S3 calls. The control plane's own role has no S3 permissions.
-- `tests/test_org_scoping.py` proves that org B gets 404 for everything of org A, that
-  hostile report SQL cannot read another org's objects or local files, and that forged,
-  expired or unsigned tokens are rejected.
-
-## Deploy to AWS
-
-You need AWS credentials with rights to create the stack, and Docker running (CDK builds
-the control plane image).
+You need Docker and [mise](https://mise.jdx.dev). (No mise? Install Python 3.12,
+[uv](https://docs.astral.sh/uv/) and [go-task](https://taskfile.dev) yourself.)
 
 ```sh
-task bootstrap                         # once per account/region
-task deploy -- -c org_id=acme          # 5-10 minutes; org_id defaults to "demo"
-task outputs                           # URL, bucket, ECR repo, user pool
+mise install     # pinned versions of python, uv, task, node, awscli and cdk
+task up          # local S3 + pipeyard on http://localhost:8000 (leave it running)
+```
+
+In a second terminal:
+
+```sh
+task demo        # registers the example pipeline, runs it, prints the report
+```
+
+Now open <http://localhost:8000>. You are signed in as the org `demo`, and you will find:
+
+- **Pipelines**: the example, its runs, and a **Trigger run** button. Press it and watch the
+  status go from running to succeeded.
+- **Datasets**: `transactions`, with its schema and row count.
+- **Reports**: a line chart of daily volume and a bar chart by category.
+
+The first `task up` takes a few minutes because it builds the local AWS emulator (about a
+200 MB download). After that it starts in seconds. When you are done, `task down`.
+
+> Local data lives in memory. Stopping the emulator wipes every pipeline, run and dataset,
+> which makes it a safe place to experiment. More in
+> [docs/local-development.md](docs/local-development.md).
+
+## Bring your own container
+
+Three steps. The [tutorial](docs/your-first-pipeline.md) walks through them with a
+complete, copy-pasteable example in about ten minutes.
+
+**1. Make your container follow the contract.** pipeyard starts it with:
+
+| Variable | What it is |
+|---|---|
+| `RUN_ID` | A unique id for this run |
+| `OUTPUT_URI` | Where to write, e.g. `s3://bucket/orgs/demo/datasets/orders/run=<run_id>/` |
+| `ORG_ID` | The org the run belongs to |
+
+plus ordinary `AWS_*` credentials, which every AWS SDK picks up by itself. Your code writes
+one or more `*.parquet` files under `OUTPUT_URI`, then a small `_manifest.json`, then exits
+with code 0. Anything else is a failed run, and the UI tells you why.
+
+**2. Describe it in a `pipeline.yaml`** like the one above.
+
+**3. Register it.** Press **Register pipeline** in the UI and paste the YAML. If something
+is wrong you get a list of exactly what to fix, and nothing is saved until it is valid.
+
+The complete rules, the manifest format and every error message are in
+[docs/container-contract.md](docs/container-contract.md).
+
+## Architecture
+
+```mermaid
+flowchart LR
+    user([You: browser or API])
+    subgraph cp[pipeyard control plane: one FastAPI app]
+        api[API + web UI]
+        auth[Token to org_id]
+        query[DuckDB, sandboxed to your org]
+        runner[Runner: Docker or Fargate]
+    end
+    idp[(Cognito, or a dev stub locally)]
+    task[[Your container]]
+    s3[(S3<br/>orgs/org_id/pipelines<br/>orgs/org_id/runs<br/>orgs/org_id/datasets)]
+
+    user -- token --> api
+    api --> auth -. verifies .-> idp
+    api --> runner -- starts --> task
+    task -- "Parquet + manifest" --> s3
+    api -- "pipeline.yaml, run records" --> s3
+    api --> query -- reads --> s3
+```
+
+A few choices keep it small:
+
+- **S3 is the only storage.** Pipelines are YAML objects, run records are JSON objects, data
+  is Parquet. Lists are DuckDB queries over a prefix.
+- **No background worker.** A run's outcome is settled the next time anyone looks at it.
+- **One process.** The API and the UI are the same FastAPI app. The UI is server-rendered
+  HTML with HTMX, so there is no front-end build.
+- **Multi-tenant-ready.** v0 serves one org, but `org_id` is part of every S3 key, token,
+  IAM session and API call, so serving many orgs later is configuration, not a rewrite.
+
+[docs/how-it-works.md](docs/how-it-works.md) follows a run from click to chart and explains
+where everything is stored.
+
+## Built to keep orgs apart
+
+Even with one org today, isolation is designed in and tested:
+
+- **The org comes from your sign-in token and nowhere else.** No URL, query string or
+  request body can name another org.
+- **Report SQL runs in a sandbox.** Only a single `SELECT` from `pipeline.yaml` is ever
+  executed, in a throwaway DuckDB that can read your org's prefix and nothing else: not
+  other orgs, not local files.
+- **In AWS, IAM enforces it again.** Every S3 call, from your container, from DuckDB and
+  from pipeyard itself, uses credentials that are only valid for `orgs/{your org}/`.
+
+`tests/test_org_scoping.py` proves it: a second org gets a 404 for everything belonging to
+the first, and deliberately hostile report SQL is refused.
+
+## Deploy to your AWS account
+
+```sh
+task bootstrap                         # once per account and region
+task deploy -- -c org_id=acme          # 5 to 10 minutes
 task create-user EMAIL=you@example.com PASSWORD='Choose-a-strong-1!'
-task push-example                      # build + push the example image to ECR
-
-export PIPEYARD_USERNAME=you@example.com PIPEYARD_PASSWORD='Choose-a-strong-1!'
-task demo-aws                          # same flow as local, on Fargate
+task push-example                      # put the example image in ECR
+task demo-aws                          # the same demo, now on Fargate
 ```
 
-Then open the `Url` output and sign in. Run logs go to the `RunLogGroup` output in
-CloudWatch Logs.
+One CDK stack creates an S3 bucket, an ECR repository, an ECS cluster, pipeyard itself on
+Fargate behind a load balancer, and a Cognito user pool for sign-in.
 
-What `task deploy` creates (one CDK stack, `infra/stack.py`):
+> **Read this first.** The AWS path is covered by `cdk synth`, template assertions and
+> stubbed AWS clients, but **it has not yet been deployed to a real account**. Expect to
+> fix a detail or two on the first deploy. And v0 makes deliberate cost-saving tradeoffs:
+> public subnets with open egress, and plain HTTP unless you supply a certificate.
 
-- S3 bucket (private, encrypted, TLS only, retained on destroy) and an ECR repository
-- ECS cluster and a **run task definition template**: read-only root filesystem, `/tmp`
-  scratch volume, CloudWatch logging, and a `timeout` sidecar that stops the task after
-  `timeout_seconds` even if the control plane is down. The control plane copies the
-  template per pipeline, swapping in the image, cpu and memory.
-- The control plane as a Fargate service behind an Application Load Balancer
-- A Cognito user pool (no self sign-up) whose `custom:org_id` attribute is immutable and
-  not writable by the app client
-- The ABAC run role described above
-
-### v0 tradeoffs to know about
-
-- **Public subnets, public IPs, no NAT.** Tasks need to reach ECR, S3, STS and CloudWatch,
-  and a NAT gateway or VPC endpoints would dominate the bill of an idle stack. Security
-  groups allow no inbound traffic to run tasks and only the load balancer to the control
-  plane, but **egress is open**: a pipeline container can call anything on the internet.
-  The next step is private subnets with VPC endpoints and an egress allow-list.
-- **HTTP by default.** Without a domain there is no certificate, so the load balancer
-  listens on plain HTTP and the sign-in form posts your password over it. For anything
-  beyond a quick trial, pass an ACM certificate and point your domain at the load
-  balancer: `task deploy -- -c certificate_arn=arn:aws:acm:...`. That switches to HTTPS,
-  redirects HTTP and marks the session cookie `Secure`.
-- **Run credentials are passed as environment variables** on the ECS task and last one
-  hour (the limit when one role assumes another), which is why `timeout_seconds` is capped
-  at 3000. They are org-scoped and short-lived, but visible to anyone in the account who
-  can describe ECS tasks.
-- **A task definition revision is registered per run.** Harmless, but they accumulate.
-- The control plane is a single task. A run triggered during a redeploy is not lost (its
-  record is in S3 and is reconciled on the next read).
-
-The AWS path has been checked with `cdk synth`, assertions on the synthesized template and
-stubbed AWS clients (`tests/test_aws_mode.py`). **It has not yet been deployed to a real
-account**, so expect to shake out a detail or two on the first `task deploy`.
-
-## Layout
-
-```
-src/pipeyard/
-  contract.py   pipeline.yaml / manifest / run-record models and the S3 key layout
-  storage.py    S3 reads and writes, org-scoped credentials
-  query.py      DuckDB: lists via read_json, sandboxed report SQL
-  runner.py     Runner interface, DockerRunner, FargateRunner
-  auth.py       token -> org_id (dev stub or Cognito)
-  app.py        FastAPI routes: /api/* and the UI
-  templates/    Jinja + HTMX, Vega-Lite from a CDN
-examples/pipelines/fake-transactions/   the example pipeline
-infra/          CDK app (one stack)
-scripts/demo.py the end-to-end demo, local and AWS
-docs/container-contract.md
-```
-
-Runtime dependencies: FastAPI, uvicorn, Jinja2, DuckDB, pydantic, PyYAML, boto3, PyJWT.
+[docs/deploy-aws.md](docs/deploy-aws.md) has the full steps, what gets created, and each
+tradeoff with its fix.
 
 ## Not yet
 
-- Billing and metering
-- Schedules (runs are triggered manually)
-- Arbitrary or ad-hoc SQL (only reports defined in `pipeline.yaml`)
-- App-style report containers (Streamlit and friends)
+v0 is deliberately small. These are known gaps, not oversights:
+
+- Schedules: runs are triggered by hand
+- Ad-hoc SQL: only reports written in `pipeline.yaml` run
+- App-style reports (Streamlit and friends)
+- More than one output dataset, or more than one input, per pipeline
 - A multi-org admin UI and org onboarding
+- Billing and metering
 - Image signing and provenance checks
 - Egress controls for run containers
-- A catalogue (DuckLake, S3 Tables); datasets are plain Hive-partitioned Parquet
-- More than one output dataset per pipeline, and more than one input
-- Run log viewing in the UI for AWS runs (use CloudWatch Logs)
+- A catalogue (DuckLake, S3 Tables): datasets are plain Hive-partitioned Parquet
+- Run logs in the UI for AWS runs (they are in CloudWatch Logs)
+
+## Documentation
+
+| | |
+|---|---|
+| [Your first pipeline](docs/your-first-pipeline.md) | Tutorial: build, register and run your own container in ten minutes |
+| [The container contract](docs/container-contract.md) | Reference: `pipeline.yaml`, environment variables, the manifest, every error |
+| [How it works](docs/how-it-works.md) | A run from click to chart, the storage layout, the API, how orgs are isolated |
+| [Local development](docs/local-development.md) | The task commands, the AWS emulator, tests, troubleshooting |
+| [Deploying to AWS](docs/deploy-aws.md) | Step by step, what is created, v0 tradeoffs |
+
+## For contributors
+
+```sh
+task test        # 110 tests against the local emulator
+task lint        # ruff
+```
+
+```
+src/pipeyard/
+  contract.py   the rules: pipeline.yaml, manifest, run record, S3 key layout
+  storage.py    S3 reads and writes, org-scoped credentials
+  query.py      DuckDB: lists and sandboxed report SQL
+  runner.py     one interface, two runners: Docker and Fargate
+  auth.py       token to org_id (dev stub or Cognito)
+  app.py        the API and the UI
+  templates/    Jinja + HTMX pages, Vega-Lite charts
+examples/pipelines/fake-transactions/   the example pipeline
+infra/          the CDK stack
+scripts/demo.py the end-to-end demo
+```
+
+Python 3.12 with FastAPI, DuckDB, pydantic, boto3 and PyJWT. Seven modules, no framework
+beyond that.
