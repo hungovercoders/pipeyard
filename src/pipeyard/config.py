@@ -55,6 +55,16 @@ class Settings:
     )
     secure_cookies: bool = field(default_factory=lambda: _env("PIPEYARD_SECURE_COOKIES") == "true")
 
+    # OpenLineage, using the standard client's variable names. Unset = events are only stored.
+    openlineage_url: str = field(default_factory=lambda: _env("OPENLINEAGE_URL"))
+    openlineage_endpoint: str = field(
+        default_factory=lambda: _env("OPENLINEAGE_ENDPOINT", "api/v1/lineage")
+    )
+    openlineage_api_key: str = field(default_factory=lambda: _env("OPENLINEAGE_API_KEY"))
+    openlineage_namespace: str = field(
+        default_factory=lambda: _env("OPENLINEAGE_NAMESPACE", "pipeyard")
+    )
+
     def __post_init__(self) -> None:
         # Anything other than "aws" used to mean local, which turns on the dev sign-in.
         if self.mode not in ("local", "aws"):

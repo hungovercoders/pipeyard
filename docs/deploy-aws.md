@@ -39,6 +39,9 @@ task demo-aws
 
 Open the `Url` from `task outputs` and sign in.
 
+To also send [lineage](lineage.md) events to an OpenLineage server, add
+`-c openlineage_url=https://...` to the deploy command.
+
 ## Running your own pipeline in AWS
 
 It is the same pipeline as locally, with two differences: the images must live somewhere

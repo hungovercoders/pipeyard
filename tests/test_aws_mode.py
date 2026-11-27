@@ -441,6 +441,24 @@ def test_stack_report_apps_accept_only_the_control_plane(template):
     assert run_rules == []  # pipeline runs still accept nothing
 
 
+def test_stack_openlineage_url_is_optional(template):
+    def env(tpl) -> dict:
+        control = next(
+            t for t in _resources(tpl, "AWS::ECS::TaskDefinition")
+            if {c["Name"] for c in t["ContainerDefinitions"]} == {"web"}
+        )  # fmt: skip
+        return {e["Name"]: e["Value"] for e in control["ContainerDefinitions"][0]["Environment"]}
+
+    assert "OPENLINEAGE_URL" not in env(template)
+
+    import aws_cdk as cdk
+    from aws_cdk.assertions import Template
+    from stack import PipeyardStack
+
+    stack = PipeyardStack(cdk.App(), "t2", org_id="demo", openlineage_url="https://lineage.example")
+    assert env(Template.from_stack(stack).to_json())["OPENLINEAGE_URL"] == "https://lineage.example"
+
+
 def test_stack_shape(template):
     types = [r["Type"] for r in template["Resources"].values()]
     assert "AWS::EC2::NatGateway" not in types  # the documented v0 tradeoff
