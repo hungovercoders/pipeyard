@@ -64,6 +64,9 @@ When you trigger a run, pipeyard calls `docker run` with the image from your
 and real S3 calls, with a fake runner in place of Docker, so they finish in seconds. Only
 `task demo` exercises a real container.
 
+Every push to `main` and every pull request runs `task lint` and `task test` in GitHub
+Actions (`.github/workflows/ci.yml`).
+
 | File | What it covers |
 |---|---|
 | `tests/test_local_loop.py` | The main flow: register, run, datasets, reports, UI pages, the register form |
