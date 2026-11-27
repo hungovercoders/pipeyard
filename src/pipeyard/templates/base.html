@@ -73,7 +73,9 @@
     .chips { display: flex; flex-wrap: wrap; gap: 6px; }
     .chip { border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-size: 12.5px; }
     .chip span { color: var(--muted); }
-    #chart, #chart.vega-embed { display: block; width: 100%; padding: 16px 14px 6px; overflow: hidden; }
+    /* Vega sizes itself to #chart's full width, so the padding goes on the wrapper. */
+    .chart-card { padding: 16px 14px 6px; }
+    #chart, #chart.vega-embed { display: block; width: 100%; }
     form.login { max-width: 340px; margin: 60px auto; padding: 24px; }
     form.login label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
     form.login input { width: 100%; font: inherit; padding: 8px 10px; border-radius: 7px;

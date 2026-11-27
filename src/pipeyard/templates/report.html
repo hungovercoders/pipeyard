@@ -6,7 +6,7 @@
 <p class="sub">Dataset <code>{{ report.dataset }}</code></p>
 {% if problem %}<div class="card note">{{ problem }}</div>{% endif %}
 {% if chart %}
-<div class="card" id="chart" role="img" aria-label="{{ report.chart.type }} chart of {{ report.chart.y }} by {{ report.chart.x }}; the same data is in the table below"></div>
+<div class="card chart-card"><div id="chart" role="img" aria-label="{{ report.chart.type }} chart of {{ report.chart.y }} by {{ report.chart.x }}; the same data is in the table below"></div></div>
 <script src="https://cdn.jsdelivr.net/npm/vega@5.30.0"></script>
 <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.21.0"></script>
 <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.26.0"></script>

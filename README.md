@@ -39,7 +39,7 @@ the next time someone reads it.
 
 [![The Daily volume report in the pipeyard UI](docs/demo.png)](docs/demo.mp4)
 
-**[Watch the 54-second walkthrough](docs/demo.mp4)**: register a pipeline from the UI,
+**[Watch the 50-second walkthrough](docs/demo.mp4)**: register a pipeline from the UI,
 trigger a run, then view the dataset and both reports. Recorded against the local stack;
 the orange dot is a pointer added for the recording.
 
