@@ -141,6 +141,7 @@ class RunRecord(BaseModel):
     row_count: int | None = None
     error: str | None = None
     contract_version: str | None = None  # the data contract version it was checked against
+    warnings: str | None = None  # contract rules of severity warning/info that were not met
 
 
 class ReportApp(BaseModel):

@@ -80,7 +80,7 @@ def test_the_example_contract_is_valid_and_keeps_fields_pipeyard_does_not_use():
         "transaction_id", "ts", "customer_id", "category", "amount",
     ]  # fmt: skip
     assert dc.model_extra["domain"] == "payments"  # not modelled, not lost
-    assert dc.table("transactions").properties[0].model_extra["primaryKey"] is True
+    assert dc.table("transactions").properties[0].primaryKey is True
 
 
 @pytest.mark.parametrize(

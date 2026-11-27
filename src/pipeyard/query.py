@@ -8,6 +8,7 @@ These keep a connection inside ``orgs/{org_id}/``:
 
 import os
 import re
+import threading
 from urllib.parse import urlparse
 
 import duckdb
@@ -17,6 +18,7 @@ from .config import Settings
 from .storage import org_credentials
 
 RUN_COLUMNS = {
+    "warnings": "VARCHAR",
     "run_id": "VARCHAR",
     "pipeline": "VARCHAR",
     "dataset": "VARCHAR",
@@ -146,28 +148,51 @@ def list_datasets(settings: Settings, org_id: str, runs: list[dict]) -> list[dic
     return sorted(datasets.values(), key=lambda d: d["dataset"])
 
 
-def describe_output(
-    settings: Settings, org_id: str, dataset: str, run_id: str, required: list[str]
-) -> tuple[dict[str, str], dict[str, int]]:
-    """What one run actually wrote: column name -> type, and null counts for ``required``.
+class RunOutput:
+    """One run's Parquet files, as the view ``run_output`` in a locked-down connection.
 
-    Read from the Parquet files themselves, not from what the container's manifest claims.
+    Used to check a run against its data contract. The schema and every number come from
+    the files themselves, not from what the container's manifest claims. The connection can
+    only read the org's own prefix, and everything run through it is cut off after
+    ``timeout`` seconds, because contract SQL rules are written by tenants.
     """
-    con, root = _connect(settings, org_id)
-    source = (
-        f"read_parquet({_lit(f'{root}datasets/{dataset}/run={run_id}/*.parquet')}, "
-        "union_by_name = true, hive_partitioning = false)"
-    )
-    with con:
-        columns = {
-            row[0]: row[1] for row in con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()
-        }
-        check = [c for c in required if c in columns]
-        nulls: dict[str, int] = {}
-        if check:
-            counts = ", ".join(
-                'count(*) FILTER (WHERE "{}" IS NULL)'.format(c.replace('"', '""')) for c in check
-            )
-            row = con.execute(f"SELECT {counts} FROM {source}").fetchone()
-            nulls = dict(zip(check, row, strict=True))
-    return columns, nulls
+
+    VIEW = "run_output"
+
+    def __init__(
+        self, settings: Settings, org_id: str, dataset: str, run_id: str, timeout: float = 30
+    ):
+        self.con, root = _connect(settings, org_id)
+        files = _lit(f"{root}datasets/{dataset}/run={run_id}/*.parquet")
+        self.con.execute(
+            f"CREATE VIEW {self.VIEW} AS SELECT * FROM read_parquet({files}, "
+            "union_by_name = true, hive_partitioning = false)"
+        )
+        described = self.con.execute(f"DESCRIBE {self.VIEW}").fetchall()
+        self.columns: dict[str, str] = {row[0]: row[1] for row in described}
+        self._timer = threading.Timer(timeout, self.con.interrupt)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def aggregates(self, expressions: dict[str, str]) -> dict:
+        """Evaluate named aggregate expressions over the run in one scan."""
+        if not expressions:
+            return {}
+        select = ", ".join(expressions.values())
+        row = self.con.execute(f"SELECT {select} FROM {self.VIEW}").fetchone()
+        return dict(zip(expressions, row, strict=True))
+
+    def scalar(self, sql: str):
+        """The first value of the first row of one SELECT statement."""
+        statements = duckdb.extract_statements(sql)
+        if len(statements) != 1 or statements[0].type != duckdb.StatementType.SELECT:
+            raise duckdb.InvalidInputException("only a single SELECT statement may be run")
+        row = self.con.execute(statements[0]).fetchone()
+        return row[0] if row else None
+
+    def __enter__(self) -> "RunOutput":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._timer.cancel()
+        self.con.close()

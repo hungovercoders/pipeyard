@@ -66,7 +66,7 @@ the proxy while debugging, at the path in its `BASE_PATH`.
 
 ## Tests
 
-`task test` starts the emulator and runs about 180 tests against it. They use the real app
+`task test` starts the emulator and runs about 240 tests against it. They use the real app
 and real S3 calls, with a fake runner in place of Docker and a tiny stand-in web server in
 place of a report container, so they finish in seconds. Only `task demo` exercises real
 containers.
@@ -78,6 +78,7 @@ Actions (`.github/workflows/ci.yml`).
 |---|---|
 | `tests/test_local_loop.py` | The main flow: register, run, datasets, UI pages, the register form |
 | `tests/test_datacontracts.py` | ODCS data contracts: registering, type matching, runs that break one |
+| `tests/test_dataquality.py` | ODCS quality rules: each metric and operator, SQL rules and their sandbox, warnings |
 | `tests/test_reports.py` | Report apps: start, stop, expiry, the HTTP and WebSocket proxy, what is never forwarded |
 | `tests/test_org_scoping.py` | One org cannot see or reach another's data; bad tokens; path tricks |
 | `tests/test_contract.py` | `pipeline.yaml` and manifest validation, and the error messages |

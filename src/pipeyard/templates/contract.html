@@ -20,5 +20,6 @@
 </form>
 <p class="sub">The contract must contain a <code>schema</code> object named <code>{{ dataset }}</code>. Checked per column:
   it exists, its type matches <code>physicalType</code> (or else <code>logicalType</code>), and it has no nulls if <code>required: true</code>.
-  Everything else in the document is stored and kept, but not enforced yet.</p>
+  <code>quality</code> rules of type <code>library</code> and <code>sql</code>, <code>unique</code> and <code>primaryKey</code> are checked too.
+  Everything else in the document is stored and kept, but not enforced.</p>
 {% endblock %}

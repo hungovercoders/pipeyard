@@ -1,5 +1,6 @@
 # The data contract for the `transactions` dataset, in the Open Data Contract Standard.
-# pipeyard checks every run of the pipeline against the `schema` section.
+# pipeyard checks every run of the pipeline against the `schema` section: the columns and
+# their types, and the `quality` rules.
 apiVersion: v3.2.0
 kind: DataContract
 id: fake-transactions-transactions
@@ -15,6 +16,11 @@ schema:
   - name: transactions
     physicalType: table
     description: One row per card transaction.
+    quality:
+      - name: not empty
+        description: Every run must produce some transactions.
+        metric: rowCount
+        mustBeGreaterThan: 0
     properties:
       - name: transaction_id
         logicalType: string
@@ -33,13 +39,36 @@ schema:
         physicalType: VARCHAR
         required: true
         description: The customer who made the transaction, e.g. cust-0042.
+        quality:
+          - name: customer id format
+            metric: invalidValues
+            arguments:
+              pattern: '^cust-[0-9]{4}$'
+            mustBe: 0
       - name: category
         logicalType: string
         physicalType: VARCHAR
         required: true
         description: Spending category, e.g. groceries or travel.
+        quality:
+          - name: known categories
+            metric: invalidValues
+            arguments:
+              validValues: [groceries, transport, dining, travel, utilities, shopping]
+            mustBe: 0
       - name: amount
         logicalType: number
         physicalType: DOUBLE
         required: true
         description: Transaction amount.
+        quality:
+          - name: positive amounts
+            type: sql
+            query: SELECT min({property}) FROM {object}
+            mustBeGreaterThan: 0
+          - name: mostly small amounts
+            description: Under a fifth of amounts should be over 100. Worth a look, not a failure.
+            type: sql
+            query: SELECT 100.0 * count(*) FILTER (WHERE {property} > 100) / count(*) FROM {object}
+            mustBeLessThan: 20
+            severity: warning

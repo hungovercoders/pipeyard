@@ -211,14 +211,12 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         if dc is None:
             return None
         run.contract_version = dc.version
-        required = [p.column for p in dc.table(run.dataset).properties if p.required]
         try:
-            columns, nulls = query.describe_output(
-                settings, run.org_id, run.dataset, run.run_id, required
-            )
+            with query.RunOutput(settings, run.org_id, run.dataset, run.run_id) as out:
+                problems, warnings = datacontract.check(dc, run.dataset, out)
         except query.duckdb.Error as e:
-            return f"could not read the run's Parquet files: {str(e).splitlines()[0]}"
-        problems = datacontract.violations(dc, run.dataset, columns, nulls)
+            return f"could not check the run against its data contract: {str(e).splitlines()[0]}"
+        run.warnings = "\n".join(f"- {w}" for w in warnings) or None
         if not problems:
             return None
         return f"data contract {dc.label} is not met:\n" + "\n".join(f"- {p}" for p in problems)
@@ -289,6 +287,16 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
                     "description": p.description,
                 }
                 for p in dc.table(dataset).properties
+            ],
+            "rules": [
+                {
+                    "rule": r.label,
+                    "requires": r.summary,
+                    "severity": r.severity,
+                    "checked": r.skipped is None,
+                    "note": r.skipped,
+                }
+                for r in datacontract.rules(dc, dataset)
             ],
         }
 
