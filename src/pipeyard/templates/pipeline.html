@@ -18,6 +18,12 @@
   <div><dt>Timeout</dt><dd>{{ spec.timeout_seconds }} s</dd></div>
 </dl>
 
+<h2>Lineage</h2>
+{% set inputs = [] %}{% for i in spec.inputs %}{{ inputs.append({"kind": "dataset", "label": i.dataset, "href": "/datasets/" ~ i.dataset}) or "" }}{% endfor %}
+{% set readers = [] %}{% for r in flow.read_by %}{{ readers.append({"kind": r.kind, "label": r.report if r.kind == "report" else r.pipeline, "href": ("/pipelines/" ~ r.pipeline ~ "/reports/" ~ r.slug) if r.kind == "report" else ("/pipelines/" ~ r.pipeline)}) or "" }}{% endfor %}
+{% set stages = ([inputs] if inputs else []) + [[{"kind": "pipeline", "label": spec.name, "here": true}], [{"kind": "dataset", "label": spec.output_dataset, "href": "/datasets/" ~ spec.output_dataset}], readers] %}
+{% include "_flow.html" %}
+
 <h2>Reports</h2>
 <div class="card scroll">
   {% if reports %}

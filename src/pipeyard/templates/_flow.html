@@ -1,0 +1,17 @@
+{# Lineage as a left-to-right flow. `stages` is a list of lists of {label, href, kind, note}. #}
+<div class="card flow" role="group" aria-label="Lineage, left to right">
+  {% for stage in stages %}
+  {% if not loop.first %}<span class="arrow" aria-hidden="true">&rarr;</span>{% endif %}
+  <div class="stage">
+    {% for node in stage %}
+    <div class="node{{ " here" if node.here }}">
+      <span class="kind">{{ node.kind }}</span>
+      {% if node.href and not node.here %}<a href="{{ node.href }}">{{ node.label }}</a>{% else %}<strong>{{ node.label }}</strong>{% endif %}
+      {% if node.note %}<span class="status {{ node.note }}">{{ node.note }}</span>{% endif %}
+    </div>
+    {% else %}
+    <div class="node none">nothing yet</div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>

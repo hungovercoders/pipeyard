@@ -265,3 +265,79 @@ def test_nothing_is_sent_without_a_url(client, app, example_yaml, receiver):
     run_once(client)
     app.state.lineage.flush()
     assert received == [] and app.state.lineage._queue is None
+
+
+# --- lineage inside pipeyard: who writes a dataset, who reads it -----------------------------
+
+DOWNSTREAM = """
+name: daily-summary
+image: summary:latest
+inputs:
+  - dataset: transactions
+outputs:
+  - dataset: daily_summary
+reports:
+  - name: Summary board
+    image: board:latest
+    dataset: daily_summary
+"""
+
+
+def test_dataset_lineage_api(client, example_yaml):
+    register(client, example_yaml)
+    register(client, DOWNSTREAM)
+    assert client.get("/api/datasets/transactions/lineage").json() == {
+        "dataset": "transactions",
+        "written_by": [{"pipeline": "fake-transactions"}],
+        "read_by": [
+            {"kind": "pipeline", "pipeline": "daily-summary"},
+            {
+                "kind": "report",
+                "pipeline": "fake-transactions",
+                "report": "Transactions dashboard",
+                "slug": "transactions-dashboard",
+            },
+        ],
+    }
+    summary = client.get("/api/datasets/daily_summary/lineage").json()
+    assert summary["written_by"] == [{"pipeline": "daily-summary"}]
+    assert [r["report"] for r in summary["read_by"]] == ["Summary board"]
+    assert client.get("/api/datasets/unknown_data/lineage").status_code == 404
+
+
+def test_lineage_is_shown_on_dataset_and_pipeline_pages(client, example_yaml):
+    register(client, example_yaml)
+    register(client, DOWNSTREAM)
+    run_once(client)
+
+    dataset = client.get("/datasets/transactions").text
+    assert "<h2>Lineage</h2>" in dataset
+    assert 'href="/pipelines/fake-transactions"' in dataset  # written by, with its last result
+    assert '<span class="status succeeded">succeeded</span>' in dataset.split("<h2>Recent runs")[0]
+    assert 'href="/pipelines/daily-summary"' in dataset  # read by a pipeline
+    assert 'href="/pipelines/fake-transactions/reports/transactions-dashboard"' in dataset
+
+    upstream = client.get("/pipelines/fake-transactions").text.split("<h2>Reports</h2>")[0]
+    assert 'href="/datasets/transactions"' in upstream and "daily-summary" in upstream
+
+    downstream = client.get("/pipelines/daily-summary").text.split("<h2>Reports</h2>")[0]
+    # reads transactions, writes daily_summary, which its report reads
+    assert downstream.index("/datasets/transactions") < downstream.index("/datasets/daily_summary")
+    assert "Summary board" in downstream
+
+
+def test_lineage_only_shows_the_callers_org(client, client_for, example_yaml):
+    register(client, example_yaml)
+    other = client_for("org-flow-b")
+    assert other.get("/api/datasets/transactions/lineage").status_code == 404
+    register(other, DOWNSTREAM)
+    mine = client.get("/api/datasets/transactions/lineage").json()
+    assert [r["pipeline"] for r in mine["read_by"]] == ["fake-transactions"]  # not org B's reader
+
+
+def test_a_dataset_nothing_reads_yet(client):
+    register(client, "name: lonely\nimage: i\noutputs: [{dataset: lonely_data}]\n")
+    run_once_named = client.post("/api/pipelines/lonely/runs").json()
+    client.get(f"/api/runs/{run_once_named['run_id']}")
+    page = client.get("/datasets/lonely_data").text
+    assert "nothing yet" in page
