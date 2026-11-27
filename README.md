@@ -197,7 +197,7 @@ What `task deploy` creates (one CDK stack, `infra/stack.py`):
   redirects HTTP and marks the session cookie `Secure`.
 - **Run credentials are passed as environment variables** on the ECS task and last one
   hour (the limit when one role assumes another), which is why `timeout_seconds` is capped
-  at 3600. They are org-scoped and short-lived, but visible to anyone in the account who
+  at 3000. They are org-scoped and short-lived, but visible to anyone in the account who
   can describe ECS tasks.
 - **A task definition revision is registered per run.** Harmless, but they accumulate.
 - The control plane is a single task. A run triggered during a redeploy is not lost (its

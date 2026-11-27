@@ -50,6 +50,11 @@ class Settings:
     run_security_group: str = field(default_factory=lambda: _env("PIPEYARD_RUN_SECURITY_GROUP"))
     secure_cookies: bool = field(default_factory=lambda: _env("PIPEYARD_SECURE_COOKIES") == "true")
 
+    def __post_init__(self) -> None:
+        # Anything other than "aws" used to mean local, which turns on the dev sign-in.
+        if self.mode not in ("local", "aws"):
+            raise ValueError(f"PIPEYARD_MODE must be 'local' or 'aws', got {self.mode!r}")
+
     @property
     def is_aws(self) -> bool:
         return self.mode == "aws"

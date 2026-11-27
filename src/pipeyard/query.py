@@ -6,6 +6,7 @@ Three things keep a connection inside ``orgs/{org_id}/``:
   3. report SQL is validated as a single SELECT before it runs.
 """
 
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -116,45 +117,77 @@ def list_runs(settings: Settings, org_id: str, pipeline: str | None = None) -> l
     return sorted(runs, key=lambda r: r["run_id"], reverse=True)
 
 
-def _manifests(con: duckdb.DuckDBPyConnection, root: str) -> list[dict]:
-    """Manifests are written by tenant containers, so their names are checked before use."""
-    found = _read_json(con, f"{root}datasets/*/run=*/{contract.MANIFEST_FILE}", MANIFEST_COLUMNS)
-    return [
-        m
-        for m in found
-        if re.fullmatch(contract.DATASET_NAME, m["dataset"] or "")
-        and contract.RUN_ID_RE.fullmatch(m["run_id"] or "")
+def _committed(runs: list[dict]) -> list[dict]:
+    """The runs whose output may be read: settled as succeeded, oldest first.
+
+    The run record is written by the control plane, so it is the source of truth. Manifests
+    and Parquet are written by tenant containers and are only trusted through it.
+    """
+    ok = [
+        r
+        for r in runs
+        if r["status"] == "succeeded"
+        and re.fullmatch(contract.DATASET_NAME, r["dataset"] or "")
+        and contract.RUN_ID_RE.fullmatch(r["run_id"] or "")
     ]
+    return sorted(ok, key=lambda r: r["run_id"])
 
 
-def list_datasets(settings: Settings, org_id: str) -> list[dict]:
-    """One entry per dataset, built from the manifests of its committed runs."""
+def list_datasets(settings: Settings, org_id: str, runs: list[dict]) -> list[dict]:
+    """One entry per dataset with a successful run; schema from the latest run's manifest."""
+    datasets: dict[str, dict] = {}
+    for r in _committed(runs):
+        d = datasets.setdefault(
+            r["dataset"], {"dataset": r["dataset"], "runs": 0, "row_count": 0, "schema": []}
+        )
+        d["runs"] += 1
+        d["row_count"] += r["row_count"] or 0
+        d["updated_at"] = r["finished_at"]
+        d["latest_run_id"] = r["run_id"]
+    if not datasets:
+        return []
     con, root = _connect(settings, org_id)
     with con:
-        manifests = _manifests(con, root)
-    datasets: dict[str, dict] = {}
-    for m in sorted(manifests, key=lambda m: m["run_id"]):
-        d = datasets.setdefault(m["dataset"], {"dataset": m["dataset"], "runs": 0, "row_count": 0})
-        d["runs"] += 1
-        d["row_count"] += m["row_count"]
-        d["schema"] = m["schema"]  # latest run wins
-        d["updated_at"] = m["created_at"]
-        d["latest_run_id"] = m["run_id"]
+        for d in datasets.values():
+            path = (
+                f"{root}datasets/{d['dataset']}/run={d['latest_run_id']}/{contract.MANIFEST_FILE}"
+            )
+            try:
+                manifests = _read_json(con, path, MANIFEST_COLUMNS)
+            except duckdb.Error:
+                continue  # replaced by something unreadable after the run: show no schema
+            if manifests and manifests[0]["schema"]:
+                d["schema"] = manifests[0]["schema"]
     return sorted(datasets.values(), key=lambda d: d["dataset"])
 
 
-def run_report(settings: Settings, org_id: str, report: contract.Report) -> Result:
+def _clean(value):
+    """Make a DuckDB value JSON-safe: NaN/infinity become null, bytes become hex text."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, bytes | bytearray):
+        return "\\x" + bytes(value).hex()
+    if isinstance(value, list | tuple):
+        return [_clean(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _clean(v) for k, v in value.items()}
+    return value
+
+
+def run_report(
+    settings: Settings, org_id: str, report: contract.Report, runs: list[dict]
+) -> Result:
     """Runs a report defined in pipeline.yaml. This is the only path that executes tenant SQL.
 
-    Each dataset in the org becomes a view named after it, reading only run directories that
-    have a manifest (the manifest is the commit marker). ``{{dataset}}`` is the report's own.
+    Each dataset in the org becomes a view named after it, reading only the directories of
+    runs that settled as succeeded. ``{{dataset}}`` is the report's own.
     """
     contract.check_report_sql(report.sql)
     con, root = _connect(settings, org_id)
     with con:
         runs_by_dataset: dict[str, list[str]] = {}
-        for m in _manifests(con, root):
-            runs_by_dataset.setdefault(m["dataset"], []).append(m["run_id"])
+        for r in _committed(runs):
+            runs_by_dataset.setdefault(r["dataset"], []).append(r["run_id"])
         if report.dataset not in runs_by_dataset:
             raise LookupError(f"dataset '{report.dataset}' has no successful runs yet")
         for dataset, run_ids in runs_by_dataset.items():
@@ -171,6 +204,6 @@ def run_report(settings: Settings, org_id: str, report: contract.Report) -> Resu
         return Result(
             columns=[d[0] for d in cur.description],
             types=[str(d[1]) for d in cur.description],
-            rows=rows[:MAX_ROWS],
+            rows=[tuple(_clean(v) for v in row) for row in rows[:MAX_ROWS]],
             truncated=len(rows) > MAX_ROWS,
         )

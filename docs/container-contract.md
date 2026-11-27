@@ -14,7 +14,7 @@ name: fake-transactions            # ^[a-z][a-z0-9-]{0,62}$
 image: <ecr-or-local-image>        # anything the runner can pull
 cpu: 256                           # Fargate CPU units: 256 | 512 | 1024 | 2048 | 4096
 memory: 512                        # MiB, must be a valid Fargate size for the cpu
-timeout_seconds: 600               # 1-3600; the run is killed after this
+timeout_seconds: 600               # 1-3000; the run is killed after this
 outputs:
   - dataset: transactions          # ^[a-z][a-z0-9_]{0,62}$ ; exactly one in v0
 inputs:                            # optional; at most one in v0
@@ -34,7 +34,8 @@ Rules checked at registration (`POST /api/pipelines`, errors come back as a list
 - Unknown keys are rejected.
 - `cpu`/`memory` must be a valid Fargate combination, in local mode too, so a pipeline
   that validates on a laptop also runs in AWS.
-- `timeout_seconds` is capped at 3600 because the run's S3 credentials last one hour.
+- `timeout_seconds` is capped at 3000 because the run's S3 credentials last one hour from
+  the moment of the trigger, and the task needs time to start before the timeout counts.
 - Each report's `sql` must parse as **exactly one `SELECT`**. `{{dataset}}` is replaced
   with the report's dataset. Every dataset in the org is also available as a view under its
   own name, so a report can join datasets. Report names must be unique within a pipeline.
@@ -90,9 +91,11 @@ Runtime environment:
    `created_at` is ISO 8601. Unknown keys are rejected.
 3. Exit `0`.
 
-The manifest is the **commit marker**. Readers only look at `run=` directories that
-contain one, so a run that dies half-way never shows up in a dataset or a report. That is
-why it must be written last.
+The manifest is the **commit marker**: write it last. pipeyard checks it when the run
+ends and records the outcome in the run record. Datasets and reports only read the
+`run=` directories of runs recorded as succeeded, so a run that dies half-way, exits
+non-zero or times out never shows up in a dataset or a report, even if it left files
+behind.
 
 ## Success and failure
 
@@ -103,7 +106,9 @@ record's `error` says which check failed:
 | What happened | `error` |
 |---|---|
 | Non-zero exit | `container exited with code N` plus the last log lines (local) or the ECS stop reason (AWS) |
-| Ran past `timeout_seconds` | local: `container exited with code 137`, `killed (timeout or out of memory)`; AWS: `timed out after Ns` |
+| Ran past `timeout_seconds` | `timed out after Ns` |
+| Killed for using more than `memory` (local) | `container exited with code 137`, `out of memory` |
+| The runner no longer knows the container (for example ECS forgets stopped tasks after about an hour) | Decided from the output alone: succeeded if a valid manifest and Parquet exist, otherwise `task no longer exists but wrote no _manifest.json` |
 | Exit 0, no manifest | `container exited 0 but wrote no _manifest.json` |
 | Exit 0, no Parquet | `container exited 0 but wrote no .parquet files` |
 | Manifest invalid or for another run | the validation message |

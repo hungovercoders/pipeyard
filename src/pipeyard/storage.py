@@ -99,9 +99,19 @@ class Storage:
         try:
             return self._s3(org_id).get_object(Bucket=self.bucket, Key=key)["Body"].read().decode()
         except ClientError as e:
-            if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
+            code = e.response["Error"]["Code"]
+            if code in ("NoSuchKey", "404"):
+                return None
+            # The run role may only list under its org prefix, and without list permission
+            # on the exact request S3 answers 403 for a missing key. Ask with a list call,
+            # which the role is allowed to make, whether the key is really there.
+            if code == "AccessDenied" and not self._exists(org_id, key):
                 return None
             raise
+
+    def _exists(self, org_id: str, key: str) -> bool:
+        found = self._s3(org_id).list_objects_v2(Bucket=self.bucket, Prefix=key, MaxKeys=1)
+        return any(o["Key"] == key for o in found.get("Contents", []))
 
     # pipelines
 

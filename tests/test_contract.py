@@ -52,7 +52,7 @@ def test_defaults():
         ),
         (
             VALID + "timeout_seconds: 99999",
-            "timeout_seconds: Input should be less than or equal to 3600",
+            "timeout_seconds: Input should be less than or equal to 3000",
         ),
         (VALID + "schedule: daily", "schedule: Extra inputs are not permitted"),
         (

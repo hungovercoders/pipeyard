@@ -23,7 +23,8 @@ EXAMPLE = Path(__file__).parent.parent / "examples/pipelines/fake-transactions/p
 class FakeRunner:
     """Stands in for Docker: does what a contract-following container would do, in-process.
 
-    ``behaviour`` picks the outcome: ok | exit1 | no_manifest | bad_manifest | running.
+    ``behaviour`` picks the outcome: ok | exit1 | exit1_after_manifest | no_manifest |
+    bad_manifest | junk_manifest | running.
     """
 
     def __init__(self, storage: Storage):
@@ -31,6 +32,7 @@ class FakeRunner:
         self.behaviour = "ok"
         self.started: list[dict] = []
         self.states: dict[str, RunState] = {}
+        self.cleaned: list[str] = []
 
     def start(self, spec, org_id, run_id, env):
         self.started.append({"spec": spec, "org_id": org_id, "run_id": run_id, "env": env})
@@ -62,17 +64,27 @@ class FakeRunner:
         }
         if self.behaviour == "bad_manifest":
             manifest["run_id"] = "someone-elses-run"
-        if self.behaviour != "no_manifest":
+        if self.behaviour == "junk_manifest":
+            self.storage.s3.put_object(
+                Bucket=self.storage.bucket, Key=prefix + contract.MANIFEST_FILE, Body=b"{not json"
+            )
+        elif self.behaviour != "no_manifest":
             self.storage.s3.upload_fileobj(
                 io.BytesIO(json.dumps(manifest).encode()),
                 self.storage.bucket,
                 prefix + contract.MANIFEST_FILE,
             )
-        self.states[run_id] = RunState(False, 0)
+        code = 1 if self.behaviour == "exit1_after_manifest" else 0
+        self.states[run_id] = RunState(False, code)
         return run_id
 
     def poll(self, handle):
-        return self.states[handle]
+        # Like the real runners: unknown once cleaned up, and never forgets before that.
+        return self.states.get(handle) or RunState(False, None, "container no longer exists", True)
+
+    def cleanup(self, handle):
+        self.cleaned.append(handle)
+        self.states.pop(handle, None)
 
 
 @pytest.fixture(scope="session")

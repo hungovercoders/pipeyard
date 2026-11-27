@@ -94,6 +94,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         storage.ensure_bucket()
 
     app = FastAPI(title="pipeyard", docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.storage = storage
 
     # --- auth -------------------------------------------------------------------------
 
@@ -187,29 +188,40 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         state = runner.poll(run.handle)
         if state.running:
             return run
+        if state.gone:
+            # Another request may have settled this run and cleaned up in the meantime.
+            latest = storage.get_run(run.org_id, run.run_id)
+            if latest is not None and latest.status != "running":
+                return latest
         error = None
         if state.exit_code == TIMEOUT_EXIT_CODE:
             error = f"timed out after {run.timeout_seconds}s"
-        elif state.exit_code != 0:
-            error = f"container exited with code {state.exit_code}"
-            if state.detail:
-                error += f"\n{state.detail}"
-        else:
+        elif state.gone or state.exit_code == 0:
+            # Exit 0, or the runner has forgotten the container (ECS drops stopped tasks
+            # after about an hour): either way the output in S3 decides.
+            ended = state.detail if state.gone else "container exited 0"
             text = storage.get_manifest_text(run.org_id, run.dataset, run.run_id)
             if text is None:
-                error = f"container exited 0 but wrote no {contract.MANIFEST_FILE}"
+                error = f"{ended} but wrote no {contract.MANIFEST_FILE}"
             elif not storage.has_parquet(run.org_id, run.dataset, run.run_id):
-                error = "container exited 0 but wrote no .parquet files"
+                error = f"{ended} but wrote no .parquet files"
             else:
                 try:
                     manifest = contract.parse_manifest(text, dataset=run.dataset, run_id=run.run_id)
                     run.row_count = manifest.row_count
                 except ContractError as e:
                     error = str(e)
+        elif state.exit_code is None:
+            error = f"container did not run: {state.detail or 'unknown reason'}"
+        else:
+            error = f"container exited with code {state.exit_code}"
+            if state.detail:
+                error += f"\n{state.detail}"
         run.status = "failed" if error else "succeeded"
         run.error = error
         run.finished_at = datetime.now(UTC)
         storage.put_run(run)
+        runner.cleanup(run.handle)  # only after the outcome is saved
         return run
 
     def list_runs(org_id: str, pipeline: str | None = None) -> list[dict]:
@@ -268,7 +280,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         if report is None:
             raise HTTPException(404, f"report '{slug}' not found")
         try:
-            result = query.run_report(settings, org_id, report)
+            result = query.run_report(settings, org_id, report, list_runs(org_id))
         except LookupError as e:
             raise HTTPException(409, str(e)) from e
         except query.duckdb.Error as e:
@@ -318,7 +330,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
 
     @app.get("/api/datasets")
     def api_datasets(org_id: Org):
-        return query.list_datasets(settings, org_id)
+        return query.list_datasets(settings, org_id, list_runs(org_id))
 
     @app.get("/api/pipelines/{name}/reports/{slug}")
     def api_report(org_id: Org, name: PipelineName, slug: Slug):
@@ -427,7 +439,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             "datasets.html",
             org_id,
             nav="datasets",
-            datasets=query.list_datasets(settings, org_id),
+            datasets=query.list_datasets(settings, org_id, list_runs(org_id)),
             producers=producers,
         )
 

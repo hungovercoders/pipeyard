@@ -82,7 +82,8 @@ class PipelineSpec(_Strict):
     image: str = Field(pattern=r"^\S+$", max_length=255)
     cpu: int = 256
     memory: int = 512
-    timeout_seconds: int = Field(default=600, ge=1, le=3600)
+    # Run credentials last 3600s from the trigger; leave room for the task to start.
+    timeout_seconds: int = Field(default=600, ge=1, le=3000)
     inputs: list[DatasetRef] = Field(default_factory=list, max_length=1)
     outputs: list[DatasetRef] = Field(min_length=1, max_length=1)
     reports: list[Report] = Field(default_factory=list)

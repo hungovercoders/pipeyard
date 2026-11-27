@@ -101,7 +101,13 @@ class PipeyardStack(Stack):
             readonly_root_filesystem=True,
             memory_reservation_mib=16,
             environment={"TIMEOUT_SECONDS": "600"},
-            command=["sh", "-c", 'sleep "$TIMEOUT_SECONDS"; exit 124'],
+            # The trap lets it stop at once when ECS ends the task; without it, PID 1 ignores
+            # SIGTERM and every run would linger for the 30s stop timeout.
+            command=[
+                "sh",
+                "-c",
+                'trap "exit 0" TERM; sleep "$TIMEOUT_SECONDS" & wait $!; exit 124',
+            ],
         )
         run_security_group = ec2.SecurityGroup(
             self,

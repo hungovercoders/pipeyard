@@ -132,7 +132,7 @@ def test_query_layer_refuses_anything_but_one_select(settings, sql):
     """Even if a non-SELECT got past registration, the query layer refuses to run it."""
     report = contract.Report.model_construct(name="x", dataset="transactions", sql=sql, chart=None)
     with pytest.raises(ValueError, match="must be"):
-        query.run_report(settings, "org-b", report)
+        query.run_report(settings, "org-b", report, [])
 
 
 def test_sandbox_cannot_be_switched_off_from_sql(two_orgs, settings):
