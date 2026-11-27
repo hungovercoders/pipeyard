@@ -4,21 +4,28 @@ This is the reference for everything pipeyard expects from a pipeline. If you wo
 learn by doing, start with [your first pipeline](your-first-pipeline.md) and come back
 here when you need a detail.
 
-A pipeline is **a container image plus a `pipeline.yaml`**. pipeyard starts the container,
-tells it where to write, and afterwards checks what it wrote. Anything that can run in a
-container and write Parquet to S3 can be a pipeline.
+A pipeline is **a container image plus a `pipeline.yaml`**, and optionally one or more
+**report containers**. pipeyard starts the pipeline container, tells it where to write, and
+afterwards checks what it wrote. It starts a report container when someone opens the
+report, and passes their browser through to it.
 
 ## The contract at a glance
 
-Your container must:
+A **pipeline container** must:
 
 - [ ] read `RUN_ID` and `OUTPUT_URI` from the environment
 - [ ] write one or more `*.parquet` files directly under `OUTPUT_URI`
 - [ ] then write `OUTPUT_URI/_manifest.json`
 - [ ] exit with code `0`
-- [ ] finish within `timeout_seconds`, writing only to `/tmp` on local disk
+- [ ] finish within `timeout_seconds`
 
-Do all five and the run succeeds. Miss one and it fails with a message saying which.
+A **report container** must:
+
+- [ ] listen for HTTP on `PORT`, on all interfaces (`0.0.0.0`)
+- [ ] serve everything under the URL prefix `BASE_PATH`
+- [ ] read its data from `INPUT_URI`, and only from `run=` folders that contain a manifest
+
+Both may write to local disk only under `/tmp`.
 
 ## pipeline.yaml
 
@@ -33,16 +40,16 @@ outputs:
 inputs:                            # optional; at most one in v0
   - dataset: raw_events
 reports:                           # optional
-  - name: Daily volume
-    dataset: transactions
-    sql: |
-      select date_trunc('day', ts) as day, sum(amount) as total
-      from {{dataset}} group by 1 order by 1
-    chart: { type: line, x: day, y: total }   # optional; type: line | bar | area | point
+  - name: Sales dashboard          # shown in the UI; its lower-case-with-dashes form is the URL slug
+    image: <ecr-or-local-image>    # a web app
+    dataset: transactions          # the dataset it reads
+    cpu: 256                       # same sizes as above
+    memory: 512
+    lifetime_seconds: 1800         # 60-3000; how long one start of the app runs
 ```
 
-Only `name`, `image` and `outputs` are required. `cpu`, `memory` and `timeout_seconds`
-default to the values shown.
+Only `name`, `image` and `outputs` are required, and for a report `name`, `image` and
+`dataset`. The sizes, `timeout_seconds` and `lifetime_seconds` default to the values shown.
 
 Rules checked when you register, in the UI or with `POST /api/pipelines`. Errors come back
 as a list of `field: message` lines (HTTP 422 from the API), and nothing is saved until the
@@ -53,12 +60,12 @@ YAML is valid:
   that validates on a laptop also runs in AWS.
 - `timeout_seconds` is capped at 3000 because the run's S3 credentials last one hour from
   the moment of the trigger, and the task needs time to start before the timeout counts.
-- Each report's `sql` must parse as **exactly one `SELECT`**. `{{dataset}}` is replaced
-  with the report's dataset. Every dataset in the org is also available as a view under its
-  own name, so a report can join datasets. Report names must be unique within a pipeline.
-- v0 runs **only** SQL defined in `pipeline.yaml`. There is no ad-hoc query endpoint.
+- `lifetime_seconds` is capped at 3000 for the same reason.
+- Report names must be unique within a pipeline.
 
-## What the container receives
+## Pipeline containers
+
+### What the container receives
 
 | Variable | Example | Notes |
 |---|---|---|
@@ -84,7 +91,7 @@ Runtime environment:
   after one hour.
 - There are no arguments and no stdin. The image's own `ENTRYPOINT`/`CMD` runs as is.
 
-## What the container must do
+### What the container must do
 
 1. Write one or more `*.parquet` files directly under `OUTPUT_URI`.
 2. **Last**, write `OUTPUT_URI/_manifest.json`:
@@ -109,12 +116,11 @@ Runtime environment:
 3. Exit `0`.
 
 The manifest is the **commit marker**: write it last. pipeyard checks it when the run
-ends and records the outcome in the run record. Datasets and reports only read the
-`run=` directories of runs recorded as succeeded, so a run that dies half-way, exits
-non-zero or times out never shows up in a dataset or a report, even if it left files
-behind.
+ends and records the outcome in the run record. If the run failed for any reason,
+pipeyard deletes everything it wrote. So a `run=` folder that contains a manifest is a
+finished, good run, and that is the rule report containers read by.
 
-## Success and failure
+### Success and failure
 
 A run **succeeds** only if all of these hold: exit code 0, `_manifest.json` exists and
 validates, and at least one `.parquet` file exists. Otherwise it **fails**, and the run
@@ -134,17 +140,69 @@ record's `error` says which check failed:
 Logs: local runs include the log tail in `error`; in AWS, stdout/stderr go to the
 CloudWatch log group named in the stack outputs.
 
+## Report containers
+
+A report is a web app. It can be Streamlit, Dash, Shiny, a notebook server, or thirty lines
+of Flask: pipeyard does not look inside. It starts the container when someone opens the
+report, waits until it answers, then forwards that person's requests to it.
+
+### What the container receives
+
+| Variable | Example | Notes |
+|---|---|---|
+| `PORT` | `8600` | Listen here, on `0.0.0.0`. Do not hard-code it: it differs between local and AWS. |
+| `BASE_PATH` | `/apps/coffee-orders/coffee-dashboard` | The URL prefix the app is served under. No trailing slash. |
+| `INPUT_URI` | `s3://bucket/orgs/demo/datasets/orders/` | The report's dataset. Contains `run=*/` folders. |
+| `ORG_ID` | `demo` | |
+| `AWS_*` | | As for pipelines, but **read-only**: the app can read its org's data, not change it. |
+
+### What the container must do
+
+1. **Serve HTTP on `PORT`.** WebSockets on the same port are forwarded too.
+2. **Serve under `BASE_PATH`.** pipeyard forwards requests with the path unchanged, so a
+   browser asking for `/apps/coffee-orders/coffee-dashboard/static/app.js` reaches your
+   app as exactly that path. Most frameworks have one setting for this:
+
+   | Framework | Setting |
+   |---|---|
+   | Streamlit | `--server.baseUrlPath "$BASE_PATH" --server.port "$PORT" --server.address 0.0.0.0` |
+   | Dash | `Dash(url_base_pathname=os.environ["BASE_PATH"] + "/")` |
+   | Flask | mount the app under `BASE_PATH`, e.g. with `DispatcherMiddleware` |
+   | Shiny, static sites | use relative links and they work under any prefix |
+
+3. **Answer a `GET` on `BASE_PATH/`** with any HTTP status. pipeyard uses this to tell
+   that the app has finished starting.
+4. **Read only finished runs.** List `INPUT_URI`, and use the Parquet files of `run=`
+   folders that contain `_manifest.json`. A run still in progress has no manifest yet.
+
+Things to know:
+
+- **Lifetime.** The container is stopped `lifetime_seconds` after it started, however busy
+  it is, and is started afresh the next time someone presses **Start report**. One
+  instance runs per report, shared by everyone in the org who opens it.
+- **Read-only filesystem.** As for pipelines, only `/tmp` is writable. Many frameworks
+  write to the home folder; setting `ENV HOME=/tmp` in the image takes care of it.
+- **Sign-in is pipeyard's job.** Only signed-in members of the org can reach the app, and
+  pipeyard removes its own cookie and any `Authorization` header before forwarding. Your
+  app's own cookies pass through untouched.
+- **Same origin.** The app is served from pipeyard's own address. Streamlit needs
+  `--server.enableCORS false --server.enableXsrfProtection false` behind a proxy like this.
+- **If it exits**, the report page shows the exit code and, locally, its last log lines.
+
+Only the Streamlit row of that table is exercised by pipeyard's own example and tests; the
+others are the frameworks' documented settings.
+
 ## S3 layout
 
 ```
 orgs/{org_id}/pipelines/{name}/pipeline.yaml
 orgs/{org_id}/runs/{run_id}.json
 orgs/{org_id}/datasets/{dataset}/run={run_id}/*.parquet + _manifest.json
+orgs/{org_id}/reports/{pipeline}/{slug}.json
 ```
 
-`run={run_id}` is a Hive-style partition: reports see a `run` column and read **every
-succeeded run** of a dataset, so runs append. To report on the latest run only, filter
-on it, for example `where run = (select max(run) from {{dataset}})`.
+`run={run_id}` is a Hive-style partition, and runs append: a dataset is every finished
+run's folder read together.
 
 A run record (`runs/{run_id}.json`) looks like:
 
@@ -158,14 +216,17 @@ A run record (`runs/{run_id}.json`) looks like:
 }
 ```
 
-`status` is `running`, `succeeded` or `failed`.
+`status` is `running`, `succeeded` or `failed`. `reports/{pipeline}/{slug}.json` is
+pipeyard's note of a report's current app: `starting`, `running` or `stopped`, when it
+expires, and where to reach it.
 
 ## Examples
 
 - [Your first pipeline](your-first-pipeline.md) builds a complete one step by step.
 - `examples/pipelines/fake-transactions/` is the pipeline behind `task demo`: about 50
   lines of Python that generate rows with DuckDB into `/tmp`, upload the Parquet file with
-  boto3, then write the manifest.
+  boto3, then write the manifest. Its `report/` folder is a Streamlit dashboard.
 
 The code that enforces this page is `src/pipeyard/contract.py` (the models and the S3
-layout) and `reconcile()` in `src/pipeyard/app.py` (the success check).
+layout), `reconcile()` in `src/pipeyard/app.py` (the success check) and
+`src/pipeyard/proxy.py` (what is forwarded to a report).

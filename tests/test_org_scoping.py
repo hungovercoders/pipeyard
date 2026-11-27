@@ -9,7 +9,7 @@ from conftest import register
 from pipeyard import contract, query
 from pipeyard.auth import ORG_CLAIM
 
-REPORT = "/api/pipelines/fake-transactions/reports/daily-volume"
+REPORT = "/api/pipelines/fake-transactions/reports/transactions-dashboard"
 
 
 @pytest.fixture
@@ -36,7 +36,8 @@ def test_org_b_sees_nothing_of_org_a(two_orgs):
         REPORT,
         "/pipelines/fake-transactions",
         "/pipelines/fake-transactions/runs",
-        "/pipelines/fake-transactions/reports/daily-volume",
+        "/pipelines/fake-transactions/reports/transactions-dashboard",
+        "/apps/fake-transactions/transactions-dashboard/",
     ):
         assert b.get(path).status_code == 404, path
     assert b.post("/api/pipelines/fake-transactions/runs").status_code == 404
@@ -66,76 +67,7 @@ def test_org_cannot_be_chosen_by_the_caller(two_orgs, runner, example_yaml):
     assert "/orgs/org-b/datasets/" in started["env"]["OUTPUT_URI"]
 
 
-def test_same_names_in_two_orgs_stay_separate(client_for, example_yaml):
-    yaml_text = example_yaml + (
-        "  - name: Owners\n    dataset: transactions\n"
-        "    sql: select distinct owner from {{dataset}}\n"
-    )
-    for org in ("org-c", "org-d"):
-        client = client_for(org)
-        register(client, yaml_text)
-        run = client.post("/api/pipelines/fake-transactions/runs").json()
-        client.get(f"/api/runs/{run['run_id']}")
-    for org in ("org-c", "org-d"):
-        rows = client_for(org).get("/api/pipelines/fake-transactions/reports/owners").json()["rows"]
-        assert rows == [{"owner": org}]
-
-
-def _report_yaml(sql: str) -> str:
-    return (
-        "name: snoop\nimage: x\noutputs: [{dataset: transactions}]\n"
-        f'reports:\n  - name: Snoop\n    dataset: transactions\n    sql: "{sql}"\n'
-    )
-
-
-@pytest.mark.parametrize(
-    "target",
-    [
-        "read_parquet('s3://{bucket}/orgs/{org_a}/datasets/transactions/run={run_id}/*.parquet')",
-        "read_parquet('s3://{bucket}/orgs/org-b/../{org_a}/datasets/transactions/*/*.parquet')",
-        "read_json('s3://{bucket}/orgs/{org_a}/runs/*.json')",
-        "read_text('s3://{bucket}/orgs/{org_a}/pipelines/fake-transactions/pipeline.yaml')",
-        "read_csv('/etc/passwd')",
-        "glob('s3://{bucket}/orgs/*/runs/*')",
-    ],
-)
-def test_report_sql_cannot_leave_the_org_prefix(two_orgs, runner, settings, target):
-    """Org B writes hostile report SQL. It is a valid SELECT, so the DuckDB sandbox must stop it."""
-    a, b, run_id = two_orgs
-    org_a = runner.started[-1]["org_id"]
-    sql = "select * from " + target.format(bucket=settings.bucket, org_a=org_a, run_id=run_id)
-    assert register(b, _report_yaml(sql)).status_code == 201
-    b.get(f"/api/runs/{b.post('/api/pipelines/snoop/runs').json()['run_id']}")
-    response = b.get("/api/pipelines/snoop/reports/snoop")
-    assert response.status_code == 400, response.text
-    assert "Permission Error" in response.json()["detail"]
-
-
-def test_report_can_read_its_own_org(two_orgs):
-    a, _, _ = two_orgs
-    report = a.get(REPORT).json()
-    assert report["rows"] and report["dataset"] == "transactions"
-
-
-@pytest.mark.parametrize(
-    "sql",
-    [
-        "select 1; select 2",
-        "copy (select 1) to 's3://elsewhere/x.parquet'",
-        "set enable_external_access = true",
-        "attach 's3://bucket/x.db' as x",
-        "create secret s (type s3)",
-        "install httpfs",
-    ],
-)
-def test_query_layer_refuses_anything_but_one_select(settings, sql):
-    """Even if a non-SELECT got past registration, the query layer refuses to run it."""
-    report = contract.Report.model_construct(name="x", dataset="transactions", sql=sql, chart=None)
-    with pytest.raises(ValueError, match="must be"):
-        query.run_report(settings, "org-b", report, [])
-
-
-def test_sandbox_cannot_be_switched_off_from_sql(two_orgs, settings):
+def test_duckdb_connections_are_locked_to_the_org(two_orgs, settings):
     """A connection that has been handed out is locked: config cannot be changed back."""
     con, root = query._connect(settings, "org-b")
     assert root.endswith("/orgs/org-b/")
@@ -202,9 +134,12 @@ def test_every_data_route_requires_a_token(app, client_for):
             continue
         path = (
             route.path.replace("{name}", "fake-transactions")
-            .replace("{slug}", "daily-volume")
+            .replace("{slug}", "transactions-dashboard")
+            .replace("{path:path}", "x")
             .replace("{run_id}", "20260101t000000z-abcdef12")
         )
+        if not getattr(route, "methods", None):
+            continue  # the WebSocket route: covered in test_reports.py
         for method in route.methods - {"HEAD", "OPTIONS"}:
             response = anonymous.request(method, path)
             expected = 401 if path.startswith("/api/") else 303

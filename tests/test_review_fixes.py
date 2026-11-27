@@ -25,14 +25,11 @@ def test_failed_run_that_left_a_manifest_is_not_data(client, runner, example_yam
     runner.behaviour = "exit1_after_manifest"  # wrote parquet + manifest, then crashed
     assert run_once(client)["status"] == "failed"
     assert client.get("/api/datasets").json() == []
-    assert client.get(f"{P}/reports/daily-volume").status_code == 409
 
     runner.behaviour = "ok"
     assert run_once(client)["status"] == "succeeded"
     (dataset,) = client.get("/api/datasets").json()
     assert (dataset["runs"], dataset["row_count"]) == (1, 30)
-    rows = client.get(f"{P}/reports/daily-volume").json()["rows"]
-    assert sum(r["total"] for r in rows) == sum(range(30))  # the failed run's rows are excluded
 
 
 @pytest.mark.parametrize("behaviour", ["junk_manifest", "bad_manifest", "no_manifest"])
@@ -44,7 +41,6 @@ def test_a_bad_manifest_cannot_break_datasets_or_reports(client, runner, example
     (dataset,) = client.get("/api/datasets").json()
     assert dataset["row_count"] == 30 and dataset["schema"]
     assert client.get("/datasets").status_code == 200
-    assert client.get(f"{P}/reports/daily-volume").status_code == 200
 
 
 def test_manifest_overwritten_after_success_only_loses_the_schema(
@@ -56,7 +52,6 @@ def test_manifest_overwritten_after_success_only_loses_the_schema(
     storage.s3.put_object(Bucket=storage.bucket, Key=key, Body=b"{not json")
     (dataset,) = client.get("/api/datasets").json()
     assert dataset["row_count"] == 30 and dataset["schema"] == []
-    assert client.get(f"{P}/reports/daily-volume").status_code == 200
 
 
 def test_datasets_and_reports_settle_runs_nobody_looked_at(client, example_yaml):
@@ -152,21 +147,6 @@ def test_missing_objects_are_404_when_s3_answers_403(client, app, example_yaml, 
 def test_unknown_mode_refuses_to_start(mode):
     with pytest.raises(ValueError, match="PIPEYARD_MODE must be"):
         Settings(mode=mode)
-
-
-def test_reports_with_nan_infinity_and_bytes(client, example_yaml):
-    yaml_text = example_yaml + (
-        "  - name: Odd values\n    dataset: transactions\n"
-        "    sql: select 'nan'::double as a, 'inf'::double as b, '\\xff\\x00'::blob as c, "
-        "[1.5, 'nan'::double] as d from {{dataset}} limit 1\n"
-        "    chart: { type: bar, x: c, y: a }\n"
-    )
-    assert register(client, yaml_text).status_code == 201
-    run_once(client)
-    response = client.get(f"{P}/reports/odd-values")
-    assert response.status_code == 200, response.text
-    assert response.json()["rows"] == [{"a": None, "b": None, "c": "\\xff00", "d": [1.5, None]}]
-    assert client.get("/pipelines/fake-transactions/reports/odd-values").status_code == 200
 
 
 def test_timeout_leaves_room_for_the_credentials():

@@ -1,4 +1,4 @@
-"""The container contract: pipeline.yaml, manifest and run-record models, and the S3 layout.
+"""The container contract: pipeline.yaml, manifest and record models, and the S3 layout.
 
 This module is the only place S3 keys are built. Every helper takes ``org_id`` first, so
 nothing can address an object outside ``orgs/{org_id}/``. See docs/container-contract.md.
@@ -9,7 +9,6 @@ import secrets
 from datetime import UTC, datetime
 from typing import Literal
 
-import duckdb
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -17,7 +16,6 @@ ORG_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 RUN_ID_RE = re.compile(r"^[0-9]{8}t[0-9]{6}z-[0-9a-f]{8}$")
 PIPELINE_NAME = r"^[a-z][a-z0-9-]{0,62}$"
 DATASET_NAME = r"^[a-z][a-z0-9_]{0,62}$"
-DATASET_PLACEHOLDER = re.compile(r"\{\{\s*dataset\s*\}\}")
 MANIFEST_FILE = "_manifest.json"
 
 # Fargate task sizes: cpu units -> allowed memory (MiB). Enforced locally too, so a
@@ -47,17 +45,27 @@ class DatasetRef(_Strict):
     dataset: str = Field(pattern=DATASET_NAME)
 
 
-class Chart(_Strict):
-    type: Literal["line", "bar", "area", "point"]
-    x: str = Field(min_length=1)
-    y: str = Field(min_length=1)
+def _check_size(cpu: int, memory: int) -> None:
+    if cpu not in FARGATE_SIZES:
+        raise ValueError(f"cpu must be one of {sorted(FARGATE_SIZES)} (Fargate CPU units)")
+    if memory not in FARGATE_SIZES[cpu]:
+        allowed = FARGATE_SIZES[cpu]
+        raise ValueError(
+            f"memory {memory} is not valid for cpu {cpu}: use "
+            f"{allowed.start}-{allowed.stop - 1} MiB in steps of {allowed.step}"
+        )
 
 
 class Report(_Strict):
+    """A report is a web app in a container. pipeyard starts it on demand and proxies to it."""
+
     name: str = Field(min_length=1, max_length=80)
+    image: str = Field(pattern=r"^\S+$", max_length=255)
     dataset: str = Field(pattern=DATASET_NAME)
-    sql: str = Field(min_length=1)
-    chart: Chart | None = None
+    cpu: int = 256
+    memory: int = 512
+    # How long one start of the app lives. Capped like run timeouts: its credentials last an hour.
+    lifetime_seconds: int = Field(default=1800, ge=60, le=3000)
 
     @property
     def slug(self) -> str:
@@ -70,11 +78,10 @@ class Report(_Strict):
             raise ValueError("must contain at least one letter or digit")
         return v
 
-    @field_validator("sql")
-    @classmethod
-    def _single_select(cls, v: str) -> str:
-        check_report_sql(v)
-        return v
+    @model_validator(mode="after")
+    def _check(self) -> "Report":
+        _check_size(self.cpu, self.memory)
+        return self
 
 
 class PipelineSpec(_Strict):
@@ -90,14 +97,7 @@ class PipelineSpec(_Strict):
 
     @model_validator(mode="after")
     def _check(self) -> "PipelineSpec":
-        if self.cpu not in FARGATE_SIZES:
-            raise ValueError(f"cpu must be one of {sorted(FARGATE_SIZES)} (Fargate CPU units)")
-        if self.memory not in FARGATE_SIZES[self.cpu]:
-            allowed = FARGATE_SIZES[self.cpu]
-            raise ValueError(
-                f"memory {self.memory} is not valid for cpu {self.cpu}: use "
-                f"{allowed.start}-{allowed.stop - 1} MiB in steps of {allowed.step}"
-            )
+        _check_size(self.cpu, self.memory)
         slugs = [r.slug for r in self.reports]
         if len(slugs) != len(set(slugs)):
             raise ValueError("report names must be unique")
@@ -139,18 +139,20 @@ class RunRecord(BaseModel):
     error: str | None = None
 
 
-def check_report_sql(sql: str) -> None:
-    """Report SQL must be exactly one SELECT. Raises ValueError with a readable message."""
-    probe = DATASET_PLACEHOLDER.sub("dataset_placeholder", sql)
-    try:
-        statements = duckdb.extract_statements(probe)
-    except duckdb.Error as e:
-        raise ValueError(f"does not parse: {str(e).splitlines()[0]}") from e
-    if len(statements) != 1:
-        raise ValueError(f"must be exactly one statement, found {len(statements)}")
-    if statements[0].type != duckdb.StatementType.SELECT:
-        kind = statements[0].type.name
-        raise ValueError(f"must be a SELECT, found {kind}")
+class ReportApp(BaseModel):
+    """One report's running (or last) app instance. Stored at reports/{pipeline}/{slug}.json."""
+
+    org_id: str
+    pipeline: str
+    slug: str
+    status: Literal["starting", "running", "stopped"]
+    instance_id: str
+    started_at: datetime
+    expires_at: datetime
+    port: int
+    handle: str | None = None  # runner's reference: container name or task ARN
+    address: str | None = None  # host:port the control plane proxies to, once known
+    error: str | None = None
 
 
 def _messages(e: ValidationError) -> list[str]:
@@ -231,3 +233,7 @@ def dataset_prefix(org_id: str, dataset: str) -> str:
 
 def output_prefix(org_id: str, dataset: str, run_id: str) -> str:
     return f"{dataset_prefix(org_id, dataset)}run={run_id}/"
+
+
+def report_app_key(org_id: str, pipeline: str, slug: str) -> str:
+    return f"{org_prefix(org_id)}reports/{pipeline}/{slug}.json"

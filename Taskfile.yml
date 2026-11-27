@@ -35,12 +35,13 @@ tasks:
     cmds: [docker compose down]
 
   build-example:
-    desc: Build the example pipeline image locally
+    desc: Build the example pipeline image and its report image locally
     cmds:
       - docker build --build-arg BASE_IMAGE={{.BASE_IMAGE}} -t {{.EXAMPLE_IMAGE}}:latest examples/pipelines/fake-transactions
+      - docker build --build-arg BASE_IMAGE={{.BASE_IMAGE}} -t {{.EXAMPLE_IMAGE}}-report:latest examples/pipelines/fake-transactions/report
 
   demo:
-    desc: Register the example pipeline, trigger a run and print its report (needs `task up`)
+    desc: Register the example pipeline, run it and start its report (needs `task up`)
     deps: [build-example]
     cmds: [uv run python scripts/demo.py]
 
@@ -85,7 +86,7 @@ tasks:
       - aws cloudformation describe-stacks --stack-name {{.STACK}} --query "Stacks[0].Outputs[].[OutputKey,OutputValue]" --output table
 
   push-example:
-    desc: Build the example image and push it to the stack's ECR repo
+    desc: Build the example pipeline and report images and push them to the stack's ECR repo
     vars:
       REPO:
         sh: aws cloudformation describe-stacks --stack-name {{.STACK}} --query "Stacks[0].Outputs[?OutputKey=='EcrRepositoryUri'].OutputValue" --output text
@@ -93,6 +94,8 @@ tasks:
       - aws ecr get-login-password | docker login --username AWS --password-stdin {{splitList "/" .REPO | first}}
       - docker build --platform linux/amd64 --build-arg BASE_IMAGE={{.BASE_IMAGE}} -t {{.REPO}}:fake-transactions examples/pipelines/fake-transactions
       - docker push {{.REPO}}:fake-transactions
+      - docker build --platform linux/amd64 --build-arg BASE_IMAGE={{.BASE_IMAGE}} -t {{.REPO}}:fake-transactions-report examples/pipelines/fake-transactions/report
+      - docker push {{.REPO}}:fake-transactions-report
 
   create-user:
     desc: "Create a Cognito user in the stack's org: task create-user EMAIL=you@example.com PASSWORD=..."
@@ -118,4 +121,4 @@ tasks:
       REPO:
         sh: aws cloudformation describe-stacks --stack-name {{.STACK}} --query "Stacks[0].Outputs[?OutputKey=='EcrRepositoryUri'].OutputValue" --output text
     cmds:
-      - uv run python scripts/demo.py --url {{.URL}} --cognito-client-id {{.CLIENT}} --image {{.REPO}}:fake-transactions
+      - uv run python scripts/demo.py --url {{.URL}} --cognito-client-id {{.CLIENT}} --image {{.REPO}}:fake-transactions --report-image {{.REPO}}:fake-transactions-report

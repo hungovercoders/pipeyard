@@ -6,15 +6,8 @@ timeout_seconds: 600
 outputs:
   - dataset: transactions
 reports:
-  - name: Daily volume
+  - name: Transactions dashboard
+    image: pipeyard-example-fake-transactions-report:latest
     dataset: transactions
-    sql: |
-      select date_trunc('day', ts) as day, sum(amount) as total
-      from {{dataset}} group by 1 order by 1
-    chart: { type: line, x: day, y: total }
-  - name: Volume by category
-    dataset: transactions
-    sql: |
-      select category, count(*) as transactions, round(sum(amount), 2) as total
-      from {{dataset}} group by 1 order by total desc
-    chart: { type: bar, x: category, y: total }
+    cpu: 512
+    memory: 1024

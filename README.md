@@ -1,28 +1,32 @@
 # pipeyard
 
-**Bring a container. Get a dataset and a dashboard.**
+**Bring your containers. Get datasets and dashboards.**
 
 You already have code that produces data: a scraper, an export job, a model that scores
-things. pipeyard turns it into a pipeline without making you learn a framework. Package the
-code as a container, describe it in a dozen lines of YAML, and pipeyard will run it, keep
-every run's output as Parquet in S3, and chart the results in a small web UI.
+things. And you have a favourite way to look at data: Streamlit, Dash, Shiny, whatever.
+pipeyard runs both without making you learn a framework. Package each as a container,
+describe them in a dozen lines of YAML, and pipeyard will run the pipeline, keep every
+run's output as Parquet in S3, and serve your dashboard behind a sign-in.
 
-[![The Daily volume report in the pipeyard UI](docs/demo.png)](docs/demo.mp4)
+[![A Streamlit report running inside pipeyard](docs/demo.png)](docs/demo.mp4)
 
-**[Watch the 50-second walkthrough](docs/demo.mp4)**: register a pipeline, trigger a run,
-see the dataset and its reports.
+**[Watch the walkthrough](docs/demo.mp4)**: register a pipeline, trigger a run, start its
+report.
 
 ## How it works
 
-1. **You bring a container and a `pipeline.yaml`.** The YAML names the image, the dataset it
-   produces, and the SQL reports you want.
-2. **pipeyard runs it** (Docker on your laptop, Fargate in AWS) and tells it where to write.
-3. **Your container writes Parquet** to that location and exits.
-4. **pipeyard serves the results**: DuckDB runs your report SQL straight over the Parquet
-   files and the UI shows a table and a chart.
+1. **You bring two containers and a `pipeline.yaml`.** One container produces data, the
+   other is a web app that shows it. The YAML names them both.
+2. **pipeyard runs the pipeline** (Docker on your laptop, Fargate in AWS) and tells it
+   where to write.
+3. **Your pipeline writes Parquet** to that location and exits.
+4. **pipeyard serves the report.** When someone opens it, pipeyard starts your report
+   container, points it at the data, and passes the signed-in browser through to it. Later
+   it stops the container again.
 
-That is the whole product. There is no database, no scheduler and no SDK to import. Your
-container only needs to read three environment variables and write files to S3.
+That is the whole product. There is no database, no scheduler and no SDK to import. A
+pipeline container reads two environment variables and writes files to S3. A report
+container listens on a port.
 
 ```yaml
 name: fake-transactions
@@ -30,12 +34,9 @@ image: pipeyard-example-fake-transactions:latest
 outputs:
   - dataset: transactions
 reports:
-  - name: Daily volume
+  - name: Transactions dashboard
+    image: pipeyard-example-fake-transactions-report:latest
     dataset: transactions
-    sql: |
-      select date_trunc('day', ts) as day, sum(amount) as total
-      from {{dataset}} group by 1 order by 1
-    chart: { type: line, x: day, y: total }
 ```
 
 ## Try it in 5 minutes
@@ -51,7 +52,7 @@ task up          # local S3 + pipeyard on http://localhost:8000 (leave it runnin
 In a second terminal:
 
 ```sh
-task demo        # registers the example pipeline, runs it, prints the report
+task demo        # registers the example, runs the pipeline, starts its report
 ```
 
 Now open <http://localhost:8000>. You are signed in as the org `demo`, and you will find:
@@ -59,36 +60,49 @@ Now open <http://localhost:8000>. You are signed in as the org `demo`, and you w
 - **Pipelines**: the example, its runs, and a **Trigger run** button. Press it and watch the
   status go from running to succeeded.
 - **Datasets**: `transactions`, with its schema and row count.
-- **Reports**: a line chart of daily volume and a bar chart by category.
+- **Reports**: **Transactions dashboard**, a Streamlit app running in its own container.
+  Filter the categories and the charts update live.
 
-The first `task up` takes a few minutes because it builds the local AWS emulator (about a
-200 MB download). After that it starts in seconds. When you are done, `task down`.
+The first `task up` and `task demo` take a few minutes because they build the local AWS
+emulator (about a 200 MB download) and the Streamlit example image. After that everything
+starts in seconds. When you are done, `task down`.
 
 > Local data lives in memory. Stopping the emulator wipes every pipeline, run and dataset,
 > which makes it a safe place to experiment. More in
 > [docs/local-development.md](docs/local-development.md).
 
-## Bring your own container
+## Bring your own containers
 
-Three steps. The [tutorial](docs/your-first-pipeline.md) walks through them with a
-complete, copy-pasteable example in about ten minutes.
+The [tutorial](docs/your-first-pipeline.md) builds both kinds from scratch in about
+fifteen minutes. In short:
 
-**1. Make your container follow the contract.** pipeyard starts it with:
+**A pipeline container** is a job. pipeyard starts it with:
 
 | Variable | What it is |
 |---|---|
 | `RUN_ID` | A unique id for this run |
 | `OUTPUT_URI` | Where to write, e.g. `s3://bucket/orgs/demo/datasets/orders/run=<run_id>/` |
-| `ORG_ID` | The org the run belongs to |
 
-plus ordinary `AWS_*` credentials, which every AWS SDK picks up by itself. Your code writes
-one or more `*.parquet` files under `OUTPUT_URI`, then a small `_manifest.json`, then exits
+It writes one or more `*.parquet` files there, then a small `_manifest.json`, then exits
 with code 0. Anything else is a failed run, and the UI tells you why.
 
-**2. Describe it in a `pipeline.yaml`** like the one above.
+**A report container** is a web app, in any framework. pipeyard starts it with:
 
-**3. Register it.** Press **Register pipeline** in the UI and paste the YAML. If something
-is wrong you get a list of exactly what to fix, and nothing is saved until it is valid.
+| Variable | What it is |
+|---|---|
+| `PORT` | The port to listen on |
+| `BASE_PATH` | The URL prefix it is served under, e.g. `/apps/coffee-orders/coffee-dashboard` |
+| `INPUT_URI` | Where its dataset lives, e.g. `s3://bucket/orgs/demo/datasets/orders/` |
+
+It serves HTTP (and WebSockets, if it likes) on that port. pipeyard starts it when someone
+opens the report and stops it after `lifetime_seconds`, 30 minutes by default.
+
+Both get `ORG_ID` and ordinary `AWS_*` credentials, which every AWS SDK picks up by itself.
+A report's credentials are read-only.
+
+**Register** them by pressing **Register pipeline** in the UI and pasting the YAML. If
+something is wrong you get a list of exactly what to fix, and nothing is saved until it is
+valid.
 
 The complete rules, the manifest format and every error message are in
 [docs/container-contract.md](docs/container-contract.md).
@@ -101,32 +115,37 @@ flowchart LR
     subgraph cp[pipeyard control plane: one FastAPI app]
         api[API + web UI]
         auth[Token to org_id]
-        query[DuckDB, sandboxed to your org]
+        proxy[Report proxy]
         runner[Runner: Docker or Fargate]
     end
     idp[(Cognito, or a dev stub locally)]
-    task[[Your container]]
+    task[[Your pipeline container]]
+    app[[Your report container]]
     s3[(S3<br/>orgs/org_id/pipelines<br/>orgs/org_id/runs<br/>orgs/org_id/datasets)]
 
     user -- token --> api
     api --> auth -. verifies .-> idp
-    api --> runner -- starts --> task
+    api --> runner
+    runner -- starts --> task
+    runner -- starts on demand --> app
     task -- "Parquet + manifest" --> s3
+    app -- "reads, read-only" --> s3
+    user -- "/apps/..." --> proxy -- "HTTP + WebSocket" --> app
     api -- "pipeline.yaml, run records" --> s3
-    api --> query -- reads --> s3
 ```
 
 A few choices keep it small:
 
 - **S3 is the only storage.** Pipelines are YAML objects, run records are JSON objects, data
-  is Parquet. Lists are DuckDB queries over a prefix.
-- **No background worker.** A run's outcome is settled the next time anyone looks at it.
+  is Parquet. The lists in the UI are DuckDB queries over a prefix.
+- **No background worker.** A run's outcome is settled the next time anyone looks at it, and
+  a report's container is stopped by its own timer.
 - **One process.** The API and the UI are the same FastAPI app. The UI is server-rendered
   HTML with HTMX, so there is no front-end build.
 - **Multi-tenant-ready.** v0 serves one org, but `org_id` is part of every S3 key, token,
   IAM session and API call, so serving many orgs later is configuration, not a rewrite.
 
-[docs/how-it-works.md](docs/how-it-works.md) follows a run from click to chart and explains
+[docs/how-it-works.md](docs/how-it-works.md) follows a run and a report from click to screen and explains
 where everything is stored.
 
 ## Built to keep orgs apart
@@ -135,14 +154,15 @@ Even with one org today, isolation is designed in and tested:
 
 - **The org comes from your sign-in token and nowhere else.** No URL, query string or
   request body can name another org.
-- **Report SQL runs in a sandbox.** Only a single `SELECT` from `pipeline.yaml` is ever
-  executed, in a throwaway DuckDB that can read your org's prefix and nothing else: not
-  other orgs, not local files.
-- **In AWS, IAM enforces it again.** Every S3 call, from your container, from DuckDB and
-  from pipeyard itself, uses credentials that are only valid for `orgs/{your org}/`.
+- **Report apps are only reachable through pipeyard.** Every request to one is checked
+  against your sign-in first, and your token is stripped before the request is passed on,
+  so a report container never holds anything it could use against the API.
+- **In AWS, IAM enforces it again.** Every S3 call, from your containers and from pipeyard
+  itself, uses credentials that are only valid for `orgs/{your org}/`. Report containers
+  get read-only ones.
 
-`tests/test_org_scoping.py` proves it: a second org gets a 404 for everything belonging to
-the first, and deliberately hostile report SQL is refused.
+`tests/test_org_scoping.py` and `tests/test_reports.py` prove it: a second org gets a 404
+for everything belonging to the first, including its running report apps.
 
 ## Deploy to your AWS account
 
@@ -150,7 +170,7 @@ the first, and deliberately hostile report SQL is refused.
 task bootstrap                         # once per account and region
 task deploy -- -c org_id=acme          # 5 to 10 minutes
 task create-user EMAIL=you@example.com PASSWORD='Choose-a-strong-1!'
-task push-example                      # put the example image in ECR
+task push-example                      # put the example images in ECR
 task demo-aws                          # the same demo, now on Fargate
 ```
 
@@ -170,8 +190,8 @@ tradeoff with its fix.
 v0 is deliberately small. These are known gaps, not oversights:
 
 - Schedules: runs are triggered by hand
-- Ad-hoc SQL: only reports written in `pipeline.yaml` run
-- App-style reports (Streamlit and friends)
+- Stopping idle reports early: a report runs for its full lifetime once started
+- Built-in SQL or chart reports: a report is always your own container
 - More than one output dataset, or more than one input, per pipeline
 - A multi-org admin UI and org onboarding
 - Billing and metering
@@ -184,16 +204,16 @@ v0 is deliberately small. These are known gaps, not oversights:
 
 | | |
 |---|---|
-| [Your first pipeline](docs/your-first-pipeline.md) | Tutorial: build, register and run your own container in ten minutes |
-| [The container contract](docs/container-contract.md) | Reference: `pipeline.yaml`, environment variables, the manifest, every error |
-| [How it works](docs/how-it-works.md) | A run from click to chart, the storage layout, the API, how orgs are isolated |
+| [Your first pipeline](docs/your-first-pipeline.md) | Tutorial: build a pipeline and a dashboard, register and run them, in fifteen minutes |
+| [The container contract](docs/container-contract.md) | Reference: `pipeline.yaml`, what pipeline and report containers get and must do, every error |
+| [How it works](docs/how-it-works.md) | A run and a report from click to screen, the storage layout, the API, how orgs are isolated |
 | [Local development](docs/local-development.md) | The task commands, the AWS emulator, tests, troubleshooting |
 | [Deploying to AWS](docs/deploy-aws.md) | Step by step, what is created, v0 tradeoffs |
 
 ## For contributors
 
 ```sh
-task test        # 110 tests against the local emulator
+task test        # 112 tests against the local emulator
 task lint        # ruff
 ```
 
@@ -201,15 +221,16 @@ task lint        # ruff
 src/pipeyard/
   contract.py   the rules: pipeline.yaml, manifest, run record, S3 key layout
   storage.py    S3 reads and writes, org-scoped credentials
-  query.py      DuckDB: lists and sandboxed report SQL
+  query.py      DuckDB: the run and dataset lists
   runner.py     one interface, two runners: Docker and Fargate
+  proxy.py      forwards browsers to report apps, HTTP and WebSocket
   auth.py       token to org_id (dev stub or Cognito)
   app.py        the API and the UI
-  templates/    Jinja + HTMX pages, Vega-Lite charts
-examples/pipelines/fake-transactions/   the example pipeline
+  templates/    Jinja + HTMX pages
+examples/pipelines/fake-transactions/   the example pipeline and its Streamlit report
 infra/          the CDK stack
 scripts/demo.py the end-to-end demo
 ```
 
-Python 3.12 with FastAPI, DuckDB, pydantic, boto3 and PyJWT. Seven modules, no framework
-beyond that.
+Python 3.12 with FastAPI, DuckDB, pydantic, boto3, httpx, websockets and PyJWT. Eight
+modules, no framework beyond that.

@@ -24,6 +24,7 @@ from constructs import Construct
 
 ROOT = str(Path(__file__).parent.parent)
 BUSYBOX = "public.ecr.aws/docker/library/busybox:stable"
+REPORT_PORT = 8080  # must match FARGATE_REPORT_PORT in src/pipeyard/app.py
 ORG_TAG = "${aws:PrincipalTag/org_id}"  # resolved by IAM at request time, not by CDK
 
 
@@ -117,6 +118,16 @@ class PipeyardStack(Stack):
             allow_all_outbound=True,
         )
 
+        # Report apps are web servers: the control plane (and nothing else) may connect to
+        # them, on the one port they are told to listen on.
+        report_security_group = ec2.SecurityGroup(
+            self,
+            "ReportSecurityGroup",
+            vpc=vpc,
+            description="pipeyard report apps: inbound from the control plane only",
+            allow_all_outbound=True,
+        )
+
         # --- auth --------------------------------------------------------------------
         user_pool = cognito.UserPool(
             self,
@@ -178,11 +189,15 @@ class PipeyardStack(Stack):
                     "PIPEYARD_RUN_TASK_TEMPLATE": template.family,
                     "PIPEYARD_RUN_SUBNETS": ",".join(s.subnet_id for s in vpc.public_subnets),
                     "PIPEYARD_RUN_SECURITY_GROUP": run_security_group.security_group_id,
+                    "PIPEYARD_REPORT_SECURITY_GROUP": report_security_group.security_group_id,
                     "PIPEYARD_SECURE_COOKIES": "true" if certificate else "false",
                 },
             ),
         )
         service.target_group.configure_health_check(path="/healthz")
+        report_security_group.connections.allow_from(
+            service.service, ec2.Port.tcp(REPORT_PORT), "control plane proxy"
+        )
         control_role = service.task_definition.task_role
 
         # --- S3 access: ABAC on the org_id session tag ----------------------------------
@@ -229,7 +244,7 @@ class PipeyardStack(Stack):
         )
         control_role.add_to_principal_policy(
             iam.PolicyStatement(
-                actions=["ecs:RunTask", "ecs:DescribeTasks"],
+                actions=["ecs:RunTask", "ecs:DescribeTasks", "ecs:StopTask"],
                 resources=["*"],
                 conditions={"ArnEquals": {"ecs:cluster": cluster.cluster_arn}},
             )

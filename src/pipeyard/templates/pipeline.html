@@ -20,14 +20,15 @@
 
 <h2>Reports</h2>
 <div class="card scroll">
-  {% if spec.reports %}
+  {% if reports %}
   <table>
-    <tr><th>Name</th><th>Dataset</th><th>Chart</th></tr>
-    {% for r in spec.reports %}
+    <tr><th>Name</th><th>Image</th><th>Dataset</th><th>App</th></tr>
+    {% for r in reports %}
     <tr>
       <td><a href="/pipelines/{{ spec.name }}/reports/{{ r.slug }}">{{ r.name }}</a></td>
+      <td class="mono">{{ r.image }}</td>
       <td class="mono">{{ r.dataset }}</td>
-      <td>{{ r.chart.type if r.chart else "table only" }}</td>
+      <td><span class="status {{ r.status }}">{{ r.status }}</span></td>
     </tr>
     {% endfor %}
   </table>

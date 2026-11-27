@@ -1,6 +1,8 @@
-"""Phase 1: register -> trigger -> dataset -> report, through the API and the UI."""
+"""The main loop: register -> trigger -> dataset, through the API and the UI."""
 
 from conftest import register
+
+from pipeyard import contract
 
 
 def test_demo_flow(client, runner, org, example_yaml):
@@ -25,20 +27,14 @@ def test_demo_flow(client, runner, org, example_yaml):
     assert dataset["dataset"] == "transactions" and dataset["row_count"] == 30
     assert {"name": "amount", "type": "DOUBLE"} in dataset["schema"]
 
-    report = client.get("/api/pipelines/fake-transactions/reports/daily-volume").json()
-    assert [c["name"] for c in report["columns"]] == ["day", "total"]
-    assert len(report["rows"]) == 3
-    assert sum(r["total"] for r in report["rows"]) == sum(range(30))
 
-
-def test_reports_read_every_committed_run(client, example_yaml):
+def test_datasets_count_every_succeeded_run(client, example_yaml):
     register(client, example_yaml)
     for _ in range(2):
         run = client.post("/api/pipelines/fake-transactions/runs").json()
         client.get(f"/api/runs/{run['run_id']}")
-    report = client.get("/api/pipelines/fake-transactions/reports/daily-volume").json()
-    assert sum(r["total"] for r in report["rows"]) == 2 * sum(range(30))
-    assert client.get("/api/datasets").json()[0]["runs"] == 2
+    (dataset,) = client.get("/api/datasets").json()
+    assert (dataset["runs"], dataset["row_count"]) == (2, 60)
 
 
 def test_failed_runs(client, runner, example_yaml):
@@ -56,15 +52,16 @@ def test_failed_runs(client, runner, example_yaml):
         assert run["error"].startswith(message), behaviour
 
 
-def test_uncommitted_output_is_not_readable(client, runner, example_yaml):
-    """Parquet without a manifest (a failed run) must not leak into reports or datasets."""
+def test_failed_runs_leave_nothing_behind(client, runner, storage, org, example_yaml):
+    """Report apps read the dataset's files directly, so a failed run's output is removed."""
     register(client, example_yaml)
-    runner.behaviour = "no_manifest"
-    client.post("/api/pipelines/fake-transactions/runs")
+    runner.behaviour = "no_manifest"  # uploads Parquet, then "forgets" the manifest
+    run = client.post("/api/pipelines/fake-transactions/runs").json()
+    prefix = contract.output_prefix(org, "transactions", run["run_id"])
+    assert storage.s3.list_objects_v2(Bucket=storage.bucket, Prefix=prefix)["KeyCount"] == 1
+    assert client.get(f"/api/runs/{run['run_id']}").json()["status"] == "failed"
+    assert storage.s3.list_objects_v2(Bucket=storage.bucket, Prefix=prefix)["KeyCount"] == 0
     assert client.get("/api/datasets").json() == []
-    response = client.get("/api/pipelines/fake-transactions/reports/daily-volume")
-    assert response.status_code == 409
-    assert "no successful runs" in response.json()["detail"]
 
 
 def test_start_failure_is_a_failed_run(client, runner, example_yaml, monkeypatch):
@@ -97,10 +94,7 @@ def test_ui_pages(client, runner, example_yaml):
     assert "succeeded" in client.get("/pipelines").text
     assert "transactions" in client.get("/datasets").text
 
-    report = client.get("/pipelines/fake-transactions/reports/daily-volume")
-    assert report.status_code == 200
-    assert "vegaEmbed" in report.text and '"type": "temporal"' in report.text
-    assert "2026-01-01" in report.text
+    assert "Transactions dashboard" in client.get("/pipelines/fake-transactions").text
     assert client.get("/pipelines/nope").status_code == 404
 
 
@@ -136,7 +130,7 @@ def test_register_form(client, example_yaml):
     assert client.get("/api/pipelines/fake-transactions").json()["cpu"] == 256
 
     edit = client.get("/register?pipeline=fake-transactions")
-    assert "Edit fake-transactions" in edit.text and "Daily volume" in edit.text
+    assert "Edit fake-transactions" in edit.text and "Transactions dashboard" in edit.text
     assert "\r" not in edit.text
     post(example_yaml.replace("cpu: 256", "cpu: 512").replace("memory: 512", "memory: 1024"))
     assert client.get("/api/pipelines/fake-transactions").json()["cpu"] == 512
@@ -148,4 +142,4 @@ def test_register_form_cannot_show_another_orgs_yaml(client_for, example_yaml):
 
     client_for("org-form-a").post("/register", content=urlencode({"yaml": example_yaml}))
     other = client_for("org-form-b").get("/register?pipeline=fake-transactions")
-    assert "Daily volume" not in other.text and "name: my-pipeline" in other.text
+    assert "Transactions dashboard" not in other.text and "name: my-pipeline" in other.text

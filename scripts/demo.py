@@ -1,4 +1,4 @@
-"""End-to-end demo: register the example pipeline, trigger a run, wait, fetch a report.
+"""End-to-end demo: register the example pipeline, run it, then start its report app.
 
 Local:  task demo          (token from the dev stub)
 AWS:    task demo-aws      (token from Cognito; needs PIPEYARD_USERNAME / PIPEYARD_PASSWORD)
@@ -31,6 +31,15 @@ def call(url: str, token: str | None = None, method: str = "GET", body: bytes | 
         sys.exit(f"cannot reach {url} ({e.reason}). Is the control plane running? (task up)")
 
 
+def fetch(url: str, token: str) -> bytes:
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})  # noqa: S310
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
+            return response.read()
+    except urllib.error.HTTPError as e:
+        sys.exit(f"GET {url} -> {e.code}: {e.read().decode()[:300]}")
+
+
 def cognito_token(client_id: str, username: str, password: str) -> str:
     import boto3
 
@@ -45,7 +54,8 @@ def cognito_token(client_id: str, username: str, password: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--url", default=os.environ.get("PIPEYARD_URL", "http://localhost:8000"))
-    parser.add_argument("--image", help="override the image in pipeline.yaml (e.g. an ECR URI)")
+    parser.add_argument("--image", help="override the pipeline image (e.g. an ECR URI)")
+    parser.add_argument("--report-image", help="override the report image (e.g. an ECR URI)")
     parser.add_argument("--cognito-client-id", default=os.environ.get("PIPEYARD_COGNITO_CLIENT_ID"))
     args = parser.parse_args()
     url = args.url.rstrip("/")
@@ -59,12 +69,13 @@ def main() -> None:
     else:
         token = call(f"{url}/dev/token", method="POST")["token"]
 
-    text = PIPELINE.read_text()
-    if args.image:
-        text = "\n".join(
-            f"image: {args.image}" if line.startswith("image:") else line
-            for line in text.splitlines()
-        )
+    lines = PIPELINE.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if args.image and line.startswith("image:"):
+            lines[i] = f"image: {args.image}"
+        if args.report_image and line.startswith("    image:"):
+            lines[i] = f"    image: {args.report_image}"
+    text = "\n".join(lines)
     spec = call(f"{url}/api/pipelines", token, "POST", text.encode())
     name = spec["name"]
     print(f"registered pipeline '{name}' ({spec['image']})")
@@ -83,13 +94,23 @@ def main() -> None:
         sys.exit(f"run failed: {run['error']}")
     print(f"  {run['row_count']} rows -> {run['output_uri']}")
 
-    slug = "daily-volume"
-    report = call(f"{url}/api/pipelines/{name}/reports/{slug}", token)
-    columns = [c["name"] for c in report["columns"]]
-    print(f"\nreport '{report['name']}': {len(report['rows'])} rows")
-    print("  " + "  ".join(f"{c:<22}" for c in columns))
-    for row in report["rows"][:5]:
-        print("  " + "  ".join(f"{str(row[c]):<22}" for c in columns))
+    report = spec["reports"][0]
+    slug = "transactions-dashboard"
+    status = call(f"{url}/api/pipelines/{name}/reports/{slug}/start", token, "POST")
+    print(f"\nstarting report '{report['name']}' ({report['image']})", end="", flush=True)
+    deadline = time.time() + 300
+    while status["status"] == "starting":
+        if time.time() > deadline:
+            sys.exit("\nthe report app is still starting after 5 minutes")
+        time.sleep(2)
+        print(".", end="", flush=True)
+        status = call(f"{url}/api/pipelines/{name}/reports/{slug}", token)
+    print(f" {status['status']}")
+    if status["status"] != "running":
+        sys.exit(f"report did not start: {status['error']}")
+    served = fetch(f"{url}{status['url']}", token)
+    print(f"  the app answered through pipeyard's proxy ({len(served):,} bytes of HTML)")
+    print(f"  it stops by itself at {status['expires_at']}")
     print(f"\nopen {url}/pipelines/{name}/reports/{slug}")
 
 
