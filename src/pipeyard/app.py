@@ -77,7 +77,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
     if not settings.is_aws:
         storage.ensure_bucket()
 
-    app = FastAPI(title="pipeyard", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    app = FastAPI(title="pipeyard", docs_url=None, redoc_url=None, openapi_url=None)
 
     # --- auth -------------------------------------------------------------------------
 
