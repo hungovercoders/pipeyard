@@ -23,7 +23,7 @@ sequenceDiagram
     C-->>R: exit 0
     You->>P: look at the run (the page polls every 2 s)
     P->>R: how did it end?
-    P->>S: check manifest and Parquet
+    P->>S: check manifest and Parquet, and the data contract if there is one
     P->>S: update run record (status: succeeded)
 ```
 
@@ -47,7 +47,7 @@ stop the task.
 
 ## Where everything is stored
 
-One bucket, one prefix per org, five kinds of object. There is no database.
+One bucket, one prefix per org, six kinds of object. There is no database.
 
 ```
 orgs/{org_id}/pipelines/{name}/pipeline.yaml
@@ -55,6 +55,7 @@ orgs/{org_id}/runs/{run_id}.json
 orgs/{org_id}/datasets/{dataset}/run={run_id}/*.parquet
 orgs/{org_id}/datasets/{dataset}/run={run_id}/_manifest.json
 orgs/{org_id}/reports/{pipeline}/{slug}.json
+orgs/{org_id}/contracts/{dataset}.odcs.yaml
 ```
 
 | What | Format | Written by |
@@ -63,6 +64,7 @@ orgs/{org_id}/reports/{pipeline}/{slug}.json
 | Run record | One JSON object per run: status, times, row count, error | pipeyard, at start and when the run is settled |
 | Data | Parquet, one or more files per run | Your container |
 | Manifest | JSON: dataset, run id, row count, schema | Your container, last |
+| Data contract | An ODCS YAML document, exactly as registered | pipeyard, when you add or edit one |
 | Report app record | JSON: starting, running or stopped; expiry; address | pipeyard, as a report starts and stops |
 
 Each run writes into its own `run={run_id}/` folder, so runs never overwrite each other. A
@@ -155,7 +157,9 @@ Everything the UI does is available as JSON. Send `Authorization: Bearer <token>
 | `POST /api/pipelines/{name}/runs` | Trigger a run. Returns the run record. |
 | `GET /api/pipelines/{name}/runs` | A pipeline's runs, newest first |
 | `GET /api/runs/{run_id}` | One run. Poll this until `status` is no longer `running`. |
-| `GET /api/datasets` | Datasets, with row counts and schema |
+| `GET /api/datasets` | Datasets, with row counts, schema and contract summary |
+| `PUT /api/datasets/{dataset}/contract` | Register or replace a dataset's data contract. The body is an ODCS document. |
+| `GET`, `DELETE /api/datasets/{dataset}/contract` | Read it back as YAML, or remove it |
 | `GET /api/pipelines/{name}/reports/{slug}` | A report's state: `stopped`, `starting` or `running`, and its URL. `slug` is the report name in lower case with dashes, e.g. `coffee-dashboard`. |
 | `POST /api/pipelines/{name}/reports/{slug}/start` | Start the report's app. Poll the state until it is `running`. |
 | `POST /api/pipelines/{name}/reports/{slug}/stop` | Stop it now |
@@ -168,6 +172,7 @@ Everything the UI does is available as JSON. Send `Authorization: Bearer <token>
 `app.py` holds the routes for both the API and the UI. It resolves the org with `auth.py`,
 builds keys and validates input with `contract.py`, reads and writes objects with
 `storage.py`, starts and checks containers through `runner.py` (one interface, a Docker
-implementation and a Fargate one), forwards report traffic with `proxy.py`, and answers
+implementation and a Fargate one), checks a run against its dataset's contract with
+`datacontract.py`, forwards report traffic with `proxy.py`, and answers
 the run and dataset lists with `query.py`.
 `config.py` reads the environment. That is all of it.

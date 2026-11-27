@@ -136,6 +136,7 @@ def test_every_data_route_requires_a_token(app, client_for):
             route.path.replace("{name}", "fake-transactions")
             .replace("{slug}", "transactions-dashboard")
             .replace("{path:path}", "x")
+            .replace("{dataset}", "transactions")
             .replace("{run_id}", "20260101t000000z-abcdef12")
         )
         if not getattr(route, "methods", None):

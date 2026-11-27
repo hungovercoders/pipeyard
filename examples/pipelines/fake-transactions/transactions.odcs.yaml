@@ -1,0 +1,45 @@
+# The data contract for the `transactions` dataset, in the Open Data Contract Standard.
+# pipeyard checks every run of the pipeline against the `schema` section.
+apiVersion: v3.2.0
+kind: DataContract
+id: fake-transactions-transactions
+name: Fake card transactions
+version: 1.0.0
+status: active
+domain: payments
+description:
+  purpose: Randomly generated card transactions, used to demonstrate pipeyard.
+  limitations: The data is fake. Do not draw conclusions from it.
+  usage: Each pipeline run appends about 10,000 transactions from the previous 30 days.
+schema:
+  - name: transactions
+    physicalType: table
+    description: One row per card transaction.
+    properties:
+      - name: transaction_id
+        logicalType: string
+        physicalType: VARCHAR
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: Unique id of the transaction (a UUID).
+      - name: ts
+        logicalType: timestamp
+        physicalType: TIMESTAMP
+        required: true
+        description: When the transaction happened, in UTC.
+      - name: customer_id
+        logicalType: string
+        physicalType: VARCHAR
+        required: true
+        description: The customer who made the transaction, e.g. cust-0042.
+      - name: category
+        logicalType: string
+        physicalType: VARCHAR
+        required: true
+        description: Spending category, e.g. groceries or travel.
+      - name: amount
+        logicalType: number
+        physicalType: DOUBLE
+        required: true
+        description: Transaction amount.

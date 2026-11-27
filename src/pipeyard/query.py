@@ -144,3 +144,30 @@ def list_datasets(settings: Settings, org_id: str, runs: list[dict]) -> list[dic
             if manifests and manifests[0]["schema"]:
                 d["schema"] = manifests[0]["schema"]
     return sorted(datasets.values(), key=lambda d: d["dataset"])
+
+
+def describe_output(
+    settings: Settings, org_id: str, dataset: str, run_id: str, required: list[str]
+) -> tuple[dict[str, str], dict[str, int]]:
+    """What one run actually wrote: column name -> type, and null counts for ``required``.
+
+    Read from the Parquet files themselves, not from what the container's manifest claims.
+    """
+    con, root = _connect(settings, org_id)
+    source = (
+        f"read_parquet({_lit(f'{root}datasets/{dataset}/run={run_id}/*.parquet')}, "
+        "union_by_name = true, hive_partitioning = false)"
+    )
+    with con:
+        columns = {
+            row[0]: row[1] for row in con.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()
+        }
+        check = [c for c in required if c in columns]
+        nulls: dict[str, int] = {}
+        if check:
+            counts = ", ".join(
+                'count(*) FILTER (WHERE "{}" IS NULL)'.format(c.replace('"', '""')) for c in check
+            )
+            row = con.execute(f"SELECT {counts} FROM {source}").fetchone()
+            nulls = dict(zip(check, row, strict=True))
+    return columns, nulls

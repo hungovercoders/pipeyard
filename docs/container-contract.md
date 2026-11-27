@@ -124,7 +124,8 @@ finished, good run, and that is the rule report containers read by.
 ### Success and failure
 
 A run **succeeds** only if all of these hold: exit code 0, `_manifest.json` exists and
-validates, and at least one `.parquet` file exists. Otherwise it **fails**, and the run
+validates, at least one `.parquet` file exists, and, if the dataset has a data contract,
+the Parquet meets it. Otherwise it **fails**, and the run
 record's `error` says which check failed:
 
 | What happened | `error` |
@@ -136,6 +137,7 @@ record's `error` says which check failed:
 | Exit 0, no manifest | `container exited 0 but wrote no _manifest.json` |
 | Exit 0, no Parquet | `container exited 0 but wrote no .parquet files` |
 | Manifest invalid or for another run | the validation message |
+| The dataset has a [data contract](data-contracts.md) and the output does not meet it | `data contract '...' version X is not met:` followed by each problem |
 | Image could not be started | `could not start: ...` |
 
 Logs: local runs include the log tail in `error`; in AWS, stdout/stderr go to the
@@ -204,6 +206,7 @@ orgs/{org_id}/pipelines/{name}/pipeline.yaml
 orgs/{org_id}/runs/{run_id}.json
 orgs/{org_id}/datasets/{dataset}/run={run_id}/*.parquet + _manifest.json
 orgs/{org_id}/reports/{pipeline}/{slug}.json
+orgs/{org_id}/contracts/{dataset}.odcs.yaml
 ```
 
 `run={run_id}` is a Hive-style partition, and runs append: a dataset is every finished

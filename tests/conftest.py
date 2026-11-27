@@ -52,7 +52,7 @@ class FakeRunner:
     """Stands in for Docker: does what a contract-following container would do, in-process.
 
     ``behaviour`` picks a run's outcome: ok | exit1 | exit1_after_manifest | no_manifest |
-    bad_manifest | junk_manifest | running. A job with a port is a report app (FakeApp).
+    bad_manifest | junk_manifest | nulls | running. A job with a port is a report app (FakeApp).
     """
 
     def __init__(self, storage: Storage):
@@ -82,7 +82,8 @@ class FakeRunner:
         path = f"/tmp/{uuid.uuid4().hex}.parquet"  # noqa: S108
         duckdb.sql(
             "select (timestamp '2026-01-01' + to_days((i % 3)::int)) as ts, "
-            f"i::double as amount, '{org_id}' as owner from range(30) t(i)"
+            f"{'nullif(i, 7)' if self.behaviour == 'nulls' else 'i'}::double as amount, "
+            f"'{org_id}' as owner from range(30) t(i)"
         ).write_parquet(path)
         self.storage.s3.upload_file(path, self.storage.bucket, prefix + "part-0.parquet")
         Path(path).unlink()

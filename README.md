@@ -52,14 +52,15 @@ task up          # local S3 + pipeyard on http://localhost:8000 (leave it runnin
 In a second terminal:
 
 ```sh
-task demo        # registers the example, runs the pipeline, starts its report
+task demo        # registers the example and its contract, runs it, starts its report
 ```
 
 Now open <http://localhost:8000>. You are signed in as the org `demo`, and you will find:
 
 - **Pipelines**: the example, its runs, and a **Trigger run** button. Press it and watch the
   status go from running to succeeded.
-- **Datasets**: `transactions`, with its schema and row count.
+- **Datasets**: `transactions`, with its row count and its data contract: the columns each
+  run must have.
 - **Reports**: **Transactions dashboard**, a Streamlit app running in its own container.
   Filter the categories and the charts update live. Close the tab, and five minutes later
   the container is gone; open the report again and it comes back.
@@ -75,7 +76,7 @@ starts in seconds. When you are done, `task down`.
 ## Bring your own containers
 
 The [tutorial](docs/your-first-pipeline.md) builds both kinds from scratch in about
-fifteen minutes. In short:
+twenty minutes. In short:
 
 **A pipeline container** is a job. pipeyard starts it with:
 
@@ -108,6 +109,30 @@ valid.
 
 The complete rules, the manifest format and every error message are in
 [docs/container-contract.md](docs/container-contract.md).
+
+## Data contracts
+
+Give a dataset a contract and every run is held to it. Contracts are written in the
+[Open Data Contract Standard](https://bitol-io.github.io/open-data-contract-standard/latest/)
+(ODCS), an open format, so they are not tied to pipeyard:
+
+```yaml
+apiVersion: v3.2.0
+kind: DataContract
+id: coffee-orders
+version: 1.0.0
+schema:
+  - name: orders
+    properties:
+      - { name: order_id, logicalType: integer, required: true }
+      - { name: price, logicalType: number }
+```
+
+When a run finishes, pipeyard compares the Parquet it wrote with the contract: every
+column present, types matching, no nulls where `required`. A run that does not conform
+fails with the reason and adds nothing, so reports can trust the columns they read. Today
+pipeyard enforces the schema part of the standard and stores the rest. See
+[docs/data-contracts.md](docs/data-contracts.md).
 
 ## Architecture
 
@@ -194,6 +219,7 @@ v0 is deliberately small. These are known gaps, not oversights:
 - Schedules: runs are triggered by hand
 - Reports that stay up longer than 50 minutes at a stretch (they restart when reopened)
 - Built-in SQL or chart reports: a report is always your own container
+- Data contract quality rules, uniqueness and service levels: only the schema is enforced
 - More than one output dataset, or more than one input, per pipeline
 - A multi-org admin UI and org onboarding
 - Billing and metering
@@ -206,8 +232,9 @@ v0 is deliberately small. These are known gaps, not oversights:
 
 | | |
 |---|---|
-| [Your first pipeline](docs/your-first-pipeline.md) | Tutorial: build a pipeline and a dashboard, register and run them, in fifteen minutes |
+| [Your first pipeline](docs/your-first-pipeline.md) | Tutorial: build a pipeline and a dashboard, register and run them, and add a data contract, in twenty minutes |
 | [The container contract](docs/container-contract.md) | Reference: `pipeline.yaml`, what pipeline and report containers get and must do, every error |
+| [Data contracts](docs/data-contracts.md) | Holding a dataset to an ODCS contract: writing one, what is checked, what is not yet |
 | [How it works](docs/how-it-works.md) | A run and a report from click to screen, the storage layout, the API, how orgs are isolated |
 | [Local development](docs/local-development.md) | The task commands, the AWS emulator, tests, troubleshooting |
 | [Deploying to AWS](docs/deploy-aws.md) | Step by step, what is created, v0 tradeoffs |
@@ -215,7 +242,7 @@ v0 is deliberately small. These are known gaps, not oversights:
 ## For contributors
 
 ```sh
-task test        # 112 tests against the local emulator
+task test        # about 180 tests against the local emulator
 task lint        # ruff
 ```
 
@@ -224,6 +251,7 @@ src/pipeyard/
   contract.py   the rules: pipeline.yaml, manifest, run record, S3 key layout
   storage.py    S3 reads and writes, org-scoped credentials
   query.py      DuckDB: the run and dataset lists
+  datacontract.py  ODCS data contracts: parsing and checking a run against one
   runner.py     one interface, two runners: Docker and Fargate
   proxy.py      forwards browsers to report apps, HTTP and WebSocket
   auth.py       token to org_id (dev stub or Cognito)
@@ -234,5 +262,5 @@ infra/          the CDK stack
 scripts/demo.py the end-to-end demo
 ```
 
-Python 3.12 with FastAPI, DuckDB, pydantic, boto3, httpx, websockets and PyJWT. Eight
+Python 3.12 with FastAPI, DuckDB, pydantic, boto3, httpx, websockets and PyJWT. Nine
 modules, no framework beyond that.
