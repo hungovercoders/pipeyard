@@ -297,7 +297,7 @@ def cognito():
         def get_signing_key_from_jwt(self, token):
             return type("Key", (), {"key": key.public_key()})
 
-    auth.jwks = Jwks()
+    auth._jwks = Jwks()
 
     def make(**overrides) -> str:
         claims = {
@@ -457,6 +457,69 @@ def test_stack_openlineage_url_is_optional(template):
 
     stack = PipeyardStack(cdk.App(), "t2", org_id="demo", openlineage_url="https://lineage.example")
     assert env(Template.from_stack(stack).to_json())["OPENLINEAGE_URL"] == "https://lineage.example"
+
+
+def _stack(**kwargs) -> dict:
+    import aws_cdk as cdk
+    from aws_cdk.assertions import Template
+    from stack import PipeyardStack
+
+    return Template.from_stack(PipeyardStack(cdk.App(), "s", org_id="demo", **kwargs)).to_json()
+
+
+def _control_plane_env(tpl) -> dict:
+    control = next(
+        t for t in _resources(tpl, "AWS::ECS::TaskDefinition")
+        if {c["Name"] for c in t["ContainerDefinitions"]} == {"web"}
+    )  # fmt: skip
+    return {e["Name"]: e["Value"] for e in control["ContainerDefinitions"][0]["Environment"]}
+
+
+def test_stack_sign_in_defaults_to_the_password_form(template):
+    """No domain, so nowhere for a provider to redirect back to: Cognito password form."""
+    env = _control_plane_env(template)
+    assert "PIPEYARD_COGNITO_POOL_ID" in env and not any("OIDC" in k for k in env)
+    (client,) = _resources(template, "AWS::Cognito::UserPoolClient")
+    assert client.get("AllowedOAuthFlowsUserPoolClient") is False  # hosted sign-in is off
+    assert "CallbackURLs" not in client
+    assert _resources(template, "AWS::Cognito::UserPoolDomain") == []
+
+
+def test_stack_sign_in_uses_cognitos_hosted_page_when_there_is_a_domain(template):
+    tpl = _stack(
+        certificate_arn="arn:aws:acm:eu-west-2:111111111111:certificate/abc",
+        domain_name="pipeyard.example.com",
+    )
+    env = _control_plane_env(tpl)
+    assert env["PIPEYARD_PUBLIC_URL"] == "https://pipeyard.example.com"
+    assert env["PIPEYARD_OIDC_ORG_CLAIM"] == "custom:org_id"
+    assert "ProviderURL" in str(env["PIPEYARD_OIDC_ISSUER"])  # the pool's own issuer address
+    assert env["PIPEYARD_OIDC_CLIENT_ID"] == env["PIPEYARD_COGNITO_CLIENT_ID"]
+    (client,) = _resources(tpl, "AWS::Cognito::UserPoolClient")
+    assert client["AllowedOAuthFlows"] == ["code"]  # no implicit flow
+    assert client["CallbackURLs"] == ["https://pipeyard.example.com/auth/callback"]
+    assert set(client["AllowedOAuthScopes"]) == {"openid", "email", "profile"}
+    assert "custom:org_id" not in client["WriteAttributes"]
+    assert len(_resources(tpl, "AWS::Cognito::UserPoolDomain")) == 1
+    assert tpl["Outputs"]["Url"]["Value"] == "https://pipeyard.example.com"
+
+
+def test_stack_sign_in_with_your_own_provider_creates_no_user_pool():
+    tpl = _stack(
+        oidc_issuer="https://idp.example.com/realms/acme", oidc_client_id="pipeyard",
+        oidc_org_claim="tenant",
+    )  # fmt: skip
+    env = _control_plane_env(tpl)
+    assert env["PIPEYARD_OIDC_ISSUER"] == "https://idp.example.com/realms/acme"
+    assert (env["PIPEYARD_OIDC_CLIENT_ID"], env["PIPEYARD_OIDC_ORG_CLAIM"]) == (
+        "pipeyard",
+        "tenant",
+    )
+    assert not any("COGNITO" in k for k in env)
+    assert not [r for r in tpl["Resources"].values() if r["Type"].startswith("AWS::Cognito")]
+    assert "UserPoolId" not in tpl["Outputs"]
+    with pytest.raises(ValueError, match="oidc_issuer needs oidc_client_id"):
+        _stack(oidc_issuer="https://idp.example.com")
 
 
 def test_stack_shape(template):

@@ -55,6 +55,22 @@ class Settings:
     )
     secure_cookies: bool = field(default_factory=lambda: _env("PIPEYARD_SECURE_COOKIES") == "true")
 
+    # Sign-in with any OpenID Connect provider. Setting the issuer switches it on, in either
+    # mode, and switches the dev stub and the Cognito password form off.
+    oidc_issuer: str = field(default_factory=lambda: _env("PIPEYARD_OIDC_ISSUER"))
+    oidc_client_id: str = field(default_factory=lambda: _env("PIPEYARD_OIDC_CLIENT_ID"))
+    oidc_client_secret: str = field(default_factory=lambda: _env("PIPEYARD_OIDC_CLIENT_SECRET"))
+    # The ID token claim that says which org the person belongs to.
+    oidc_org_claim: str = field(default_factory=lambda: _env("PIPEYARD_OIDC_ORG_CLAIM", "org_id"))
+    oidc_scopes: str = field(
+        default_factory=lambda: _env("PIPEYARD_OIDC_SCOPES", "openid email profile")
+    )
+    # Where browsers reach pipeyard, e.g. https://pipeyard.example.com. Needed behind a load
+    # balancer so the provider is given the right address to send people back to.
+    public_url: str = field(default_factory=lambda: _env("PIPEYARD_PUBLIC_URL"))
+    session_secret: str = field(default_factory=lambda: _env("PIPEYARD_SESSION_SECRET"))
+    session_hours: float = field(default_factory=lambda: float(_env("PIPEYARD_SESSION_HOURS", "8")))
+
     # OpenLineage, using the standard client's variable names. Unset = events are only stored.
     openlineage_url: str = field(default_factory=lambda: _env("OPENLINEAGE_URL"))
     openlineage_endpoint: str = field(
@@ -69,6 +85,10 @@ class Settings:
         # Anything other than "aws" used to mean local, which turns on the dev sign-in.
         if self.mode not in ("local", "aws"):
             raise ValueError(f"PIPEYARD_MODE must be 'local' or 'aws', got {self.mode!r}")
+        if self.oidc_issuer and not self.oidc_client_id:
+            raise ValueError(
+                "PIPEYARD_OIDC_ISSUER is set, so PIPEYARD_OIDC_CLIENT_ID is needed too"
+            )
 
     @property
     def is_aws(self) -> bool:

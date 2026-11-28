@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.templating import Jinja2Templates
 
 from . import contract, datacontract, proxy, query
-from .auth import COOKIE, Auth, AuthError
+from .auth import COOKIE, LOGIN_COOKIE, Auth, AuthError
 from .config import Settings
 from .contract import ContractError, PipelineSpec, Report, ReportApp, RunRecord
 from .lineage import Lineage, error_facet, job_type_facet, schema_facet, statistics_facet
@@ -138,49 +138,98 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             status_code=exc.status_code,
         )
 
-    def _signed_in(token: str, next_path: str) -> RedirectResponse:
-        target = next_path if next_path.startswith("/") and not next_path.startswith("//") else "/"
-        response = RedirectResponse(target, status_code=303)
+    def _safe_next(next_path: str) -> str:
+        """Only ever redirect back into pipeyard itself."""
+        return next_path if next_path.startswith("/") and not next_path.startswith("//") else "/"
+
+    def _secure(request: Request) -> bool:
+        public = settings.public_url or str(request.base_url)
+        return settings.secure_cookies or public.startswith("https://")
+
+    def _callback_url(request: Request) -> str:
+        base = settings.public_url or str(request.base_url)
+        return base.rstrip("/") + "/auth/callback"
+
+    def _signed_in(request: Request, token: str, next_path: str) -> RedirectResponse:
+        response = RedirectResponse(_safe_next(next_path), status_code=303)
         response.set_cookie(
             COOKIE,
             token,
             httponly=True,
             samesite="lax",
-            secure=settings.secure_cookies,
-            max_age=3600 if settings.is_aws else 12 * 3600,
+            secure=_secure(request),
+            max_age=auth.session_seconds,
         )
         return response
 
+    def _login_page(request: Request, next_path: str, error: str | None, status: int = 200):
+        context = {"next": next_path, "error": error, "kind": auth.kind}
+        return templates.TemplateResponse(request, "login.html", context, status_code=status)
+
     @app.get("/login")
-    def login_page(request: Request, next: str = "/"):
-        if not settings.is_aws:  # dev stub: sign straight in as the dev org
-            return _signed_in(auth.dev_token(), next)
-        return templates.TemplateResponse(request, "login.html", {"next": next, "error": None})
+    def login_page(request: Request, next: str = "/", signed_out: bool = False):
+        if auth.kind == "dev":  # everyone is signed straight in as the dev org
+            return _signed_in(request, auth.dev_token(), next)
+        if auth.kind == "cognito" or signed_out:
+            return _login_page(request, next, None)
+        try:  # OpenID Connect: hand the browser to the provider
+            url, attempt = auth.begin_login(_safe_next(next), _callback_url(request))
+        except AuthError as e:
+            return _login_page(request, next, str(e), 502)
+        response = RedirectResponse(url, status_code=303)
+        response.set_cookie(
+            LOGIN_COOKIE, attempt, httponly=True, samesite="lax", secure=_secure(request),
+            max_age=600,
+        )  # fmt: skip
+        return response
+
+    @app.get("/auth/callback")
+    def login_callback(
+        request: Request, code: str = "", state: str = "", error: str = "",
+        error_description: str = "",
+    ):  # fmt: skip
+        """Where the OpenID Connect provider sends the browser back to."""
+        if auth.kind != "oidc":
+            raise HTTPException(404, "not found")
+        try:
+            if error or not code:
+                reason = error_description or error or "no code was returned"
+                raise AuthError(f"the sign-in provider reported: {reason}")
+            token, next_path = auth.finish_login(
+                request.cookies.get(LOGIN_COOKIE), state, code, _callback_url(request)
+            )
+        except AuthError as e:
+            response = _login_page(request, "/", str(e), 401)
+        else:
+            response = _signed_in(request, token, next_path)
+        response.delete_cookie(LOGIN_COOKIE)
+        return response
 
     @app.post("/login")
     def login(request: Request, body: Annotated[bytes, Body()], next: str = "/"):
-        if not settings.is_aws:
+        if auth.kind != "cognito":
             raise HTTPException(404, "not found")
         form = parse_qs(body.decode())
         try:
             token = auth.cognito_login(form.get("username", [""])[0], form.get("password", [""])[0])
             auth.org_id(token)
         except AuthError as e:
-            return templates.TemplateResponse(
-                request, "login.html", {"next": next, "error": str(e)}, status_code=401
-            )
-        return _signed_in(token, next)
+            return _login_page(request, next, str(e), 401)
+        return _signed_in(request, token, next)
 
     @app.get("/logout")
     def logout():
-        response = RedirectResponse("/login" if settings.is_aws else "/", status_code=303)
+        # With a provider, going straight back to /login would sign the person in again
+        # at once, so show a signed-out page instead.
+        target = {"dev": "/", "cognito": "/login", "oidc": "/login?signed_out=true"}[auth.kind]
+        response = RedirectResponse(target, status_code=303)
         response.delete_cookie(COOKIE)
         return response
 
     @app.post("/dev/token")
     def dev_token():
-        """Local stub: a token for the dev org. Does not exist in aws mode."""
-        if settings.is_aws:
+        """Local stub: a token for the dev org. Only exists when no provider is configured."""
+        if auth.kind != "dev":
             raise HTTPException(404, "not found")
         return {"token": auth.dev_token(), "org_id": settings.dev_org_id}
 

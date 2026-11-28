@@ -133,7 +133,7 @@ in place, in three independent layers:
 
 | Layer | What it does |
 |---|---|
-| **The token** | Every request's org is read from a verified sign-in token: a Cognito ID token in AWS, a locally signed stub in development. No route accepts an org in its path, query or body. |
+| **The token** | Every request's org is read from a verified token: an ID token from your [OpenID Connect provider](sign-in.md) (or Cognito), the session pipeyard issues after such a sign-in, or a locally signed stub in development. No route accepts an org in its path, query or body. |
 | **The code** | S3 keys are built in one module (`contract.py`), and every helper starts from `orgs/{org_id}/`. The report proxy looks an app up by the caller's org, so another org's app does not exist as far as it can tell. |
 | **IAM (AWS only)** | One role allows only `orgs/${aws:PrincipalTag/org_id}/*`. pipeyard assumes it with an `org_id` session tag and uses those credentials for your containers and for its own S3 calls. Report containers get a read-only version. pipeyard's own role has no S3 permissions at all. |
 

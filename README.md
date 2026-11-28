@@ -159,7 +159,7 @@ flowchart LR
         proxy[Report proxy]
         runner[Runner: Docker or Fargate]
     end
-    idp[(Cognito, or a dev stub locally)]
+    idp[(Your OpenID Connect provider,<br/>or a dev stub locally)]
     task[[Your pipeline container]]
     app[[Your report container]]
     s3[(S3<br/>orgs/org_id/pipelines<br/>orgs/org_id/runs<br/>orgs/org_id/datasets)]
@@ -193,6 +193,8 @@ where everything is stored.
 
 Even with one org today, isolation is designed in and tested:
 
+- **Sign-in is yours.** pipeyard uses OpenID Connect, so it sits behind the provider your
+  organisation already has (Okta, Entra ID, Keycloak, Cognito...) and never sees a password.
 - **The org comes from your sign-in token and nowhere else.** No URL, query string or
   request body can name another org.
 - **Report apps are only reachable through pipeyard.** Every request to one is checked
@@ -216,12 +218,14 @@ task demo-aws                          # the same demo, now on Fargate
 ```
 
 One CDK stack creates an S3 bucket, an ECR repository, an ECS cluster, pipeyard itself on
-Fargate behind a load balancer, and a Cognito user pool for sign-in.
+Fargate behind a load balancer, and a Cognito user pool for sign-in (or none, if you connect
+your own provider).
 
 > **Read this first.** The AWS path is covered by `cdk synth`, template assertions and
 > stubbed AWS clients, but **it has not yet been deployed to a real account**. Expect to
 > fix a detail or two on the first deploy. And v0 makes deliberate cost-saving tradeoffs:
-> public subnets with open egress, and plain HTTP unless you supply a certificate.
+> public subnets with open egress, and plain HTTP with a password form unless you supply a
+> domain and certificate.
 
 [docs/deploy-aws.md](docs/deploy-aws.md) has the full steps, what gets created, and each
 tradeoff with its fix.
@@ -250,6 +254,7 @@ v0 is deliberately small. These are known gaps, not oversights:
 | [The container contract](docs/container-contract.md) | Reference: `pipeline.yaml`, what pipeline and report containers get and must do, every error |
 | [Data contracts](docs/data-contracts.md) | Holding a dataset to an ODCS contract: schema, quality rules, what is not checked yet |
 | [Lineage](docs/lineage.md) | The lineage diagram on each page, the OpenLineage events pipeyard records, and sending them to a lineage tool |
+| [Signing in](docs/sign-in.md) | Connecting your own sign-in provider with OpenID Connect |
 | [How it works](docs/how-it-works.md) | A run and a report from click to screen, the storage layout, the API, how orgs are isolated |
 | [Local development](docs/local-development.md) | The task commands, the AWS emulator, tests, troubleshooting |
 | [Deploying to AWS](docs/deploy-aws.md) | Step by step, what is created, v0 tradeoffs |
@@ -257,7 +262,7 @@ v0 is deliberately small. These are known gaps, not oversights:
 ## For contributors
 
 ```sh
-task test        # about 260 tests against the local emulator
+task test        # about 290 tests against the local emulator
 task lint        # ruff
 ```
 
@@ -270,7 +275,7 @@ src/pipeyard/
   lineage.py    OpenLineage events for runs and reports
   runner.py     one interface, two runners: Docker and Fargate
   proxy.py      forwards browsers to report apps, HTTP and WebSocket
-  auth.py       token to org_id (dev stub or Cognito)
+  auth.py       sign-in (OpenID Connect, Cognito, or the dev stub) and token to org_id
   app.py        the API and the UI
   templates/    Jinja + HTMX pages
 examples/pipelines/fake-transactions/   the example pipeline and its Streamlit report

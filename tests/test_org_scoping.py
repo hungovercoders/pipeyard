@@ -126,7 +126,7 @@ def test_path_parameters_cannot_escape(client, path):
 
 def test_every_data_route_requires_a_token(app, client_for):
     """Guards against a future route forgetting the org dependency."""
-    open_paths = {"/login", "/logout", "/dev/token", "/healthz", "/"}
+    open_paths = {"/login", "/logout", "/auth/callback", "/dev/token", "/healthz", "/"}
     anonymous = client_for(None)
     checked = 0
     for route in app.routes:
