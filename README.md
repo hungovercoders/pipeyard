@@ -62,6 +62,8 @@ Now open <http://localhost:8000>. You are signed in as the org `demo`, and you w
   status go from running to succeeded.
 - **Datasets**: `transactions`, with its row count and its data contract: the columns each
   run must have.
+- **Lineage**, on both of those pages: the pipeline writes `transactions`, and the report
+  reads it.
 - **Reports**: **Transactions dashboard**, a Streamlit app running in its own container.
   Filter the categories and the charts update live. Close the tab, and five minutes later
   the container is gone; open the report again and it comes back.

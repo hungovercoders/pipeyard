@@ -232,6 +232,10 @@ and after a few seconds the dashboard appears inside the page. Pick a drink from
 the numbers change: that is your container, live, with pipeyard passing your browser's
 requests through to it.
 
+Go back to the pipeline page and look at its **Lineage** section: `coffee-orders` writes
+`orders`, and **Coffee dashboard** reads it. pipeyard worked that out from your YAML, and
+it is how you will later see what a change to a pipeline would affect.
+
 A few things to notice:
 
 - **You did not rerun the pipeline.** Reports read the data that is already there.
@@ -304,7 +308,7 @@ last of those. [Data contracts](data-contracts.md#quality-rules) lists what you 
 - A report is a second container: any web app that listens on `$PORT` under `$BASE_PATH`
   and reads the dataset at `INPUT_URI`.
 - pipeyard starts a report when it is opened, keeps it behind sign-in, and stops it when
-  nobody is using it.
+  nobody is using it. Each page shows the lineage from pipeline to dataset to report.
 - A data contract turns "the columns I hope are there" into something every run must meet.
 
 ## Where next
