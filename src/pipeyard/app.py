@@ -689,6 +689,30 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             raise HTTPException(404, f"run '{run_id}' not found")
         return reconcile(run).model_dump(exclude={"handle"})
 
+    def dataset_lineage(org_id: str, dataset: str, specs: list[PipelineSpec]) -> dict:
+        """Who writes a dataset and who reads it, from what the org's pipelines declare."""
+        writers = [{"pipeline": s.name} for s in specs if s.output_dataset == dataset]
+        readers = [
+            {"kind": "pipeline", "pipeline": s.name}
+            for s in specs
+            if any(i.dataset == dataset for i in s.inputs)
+        ]
+        readers += [
+            {"kind": "report", "pipeline": s.name, "report": r.name, "slug": r.slug}
+            for s in specs
+            for r in s.reports
+            if r.dataset == dataset
+        ]
+        return {"dataset": dataset, "written_by": writers, "read_by": readers}
+
+    @app.get("/api/datasets/{dataset}/lineage")
+    def api_dataset_lineage(org_id: Org, dataset: DatasetName):
+        """What writes this dataset and what reads it."""
+        result = dataset_lineage(org_id, dataset, storage.list_pipelines(org_id))
+        if not result["written_by"] and not result["read_by"]:
+            raise HTTPException(404, f"nothing reads or writes dataset '{dataset}'")
+        return result
+
     @app.get("/api/runs/{run_id}/lineage")
     def api_run_lineage(org_id: Org, run_id: RunId):
         """The OpenLineage events recorded for a pipeline run or a report app instance."""
@@ -808,6 +832,7 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
             spec=spec,
             runs=list_runs(org_id, name),
             reports=[report_view(spec, r, report_app(org_id, name, r.slug)) for r in spec.reports],
+            flow=dataset_lineage(org_id, spec.output_dataset, storage.list_pipelines(org_id)),
         )
 
     @app.get("/pipelines/{name}/runs", response_class=HTMLResponse)
@@ -841,7 +866,16 @@ def create_app(settings: Settings | None = None, runner: Runner | None = None) -
         if entry is None:
             raise HTTPException(404, f"dataset '{dataset}' not found")
         runs = [r for r in list_runs(org_id) if r["dataset"] == dataset]
-        return page(request, "dataset.html", org_id, nav="datasets", dataset=entry, runs=runs[:10])
+        latest: dict[str, dict] = {}
+        for run in runs:
+            latest.setdefault(run["pipeline"], run)
+        flow = dataset_lineage(org_id, dataset, storage.list_pipelines(org_id))
+        for writer in flow["written_by"]:
+            writer["latest_status"] = latest.get(writer["pipeline"], {}).get("status")
+        return page(
+            request, "dataset.html", org_id, nav="datasets", dataset=entry, runs=runs[:10],
+            flow=flow,
+        )  # fmt: skip
 
     @app.get("/datasets/{dataset}/contract", response_class=HTMLResponse)
     def ui_contract_form(request: Request, org_id: Org, dataset: DatasetName):

@@ -1,6 +1,31 @@
 # Lineage
 
-pipeyard describes what it runs in [OpenLineage](https://openlineage.io), the open standard
+Lineage answers two questions: where did this data come from, and what depends on it?
+pipeyard answers them in two places. Inside pipeyard, every dataset and pipeline page shows
+its lineage as a small diagram. For everything beyond pipeyard, it records what it runs in
+a standard format that lineage tools understand.
+
+## Lineage inside pipeyard
+
+![A dataset's lineage: the pipeline that writes it, then the pipeline and report that read it](lineage-flow.png)
+
+Open a dataset and the **Lineage** section shows what writes it on the left, with the
+result of its latest run, and what reads it on the right: reports, and any pipeline that
+takes it as an input. Open a pipeline and you see the same thing from its side: the
+dataset it reads, if any, then the dataset it writes, then whatever reads that. Every box
+is a link, so you can walk the chain.
+
+This is how you answer "if I change this pipeline, which reports are affected?" or "this
+report looks wrong; what produces its data, and did the last run fail?" without leaving
+pipeyard.
+
+The diagram is drawn from what your `pipeline.yaml` files declare (`inputs`, `outputs` and
+each report's `dataset`), so it is complete even for things that have never run. The same
+information is available from `GET /api/datasets/{dataset}/lineage`.
+
+## Lineage for other tools: OpenLineage
+
+pipeyard also describes what it runs in [OpenLineage](https://openlineage.io), the open standard
 for data lineage. Each pipeline run and each report is recorded as an event saying which
 job ran, which datasets it read and which it wrote. Feed those events to any
 OpenLineage-compatible tool (Marquez, DataHub, OpenMetadata, Atlan and others) and it can
@@ -9,7 +34,7 @@ draw the graph: this pipeline writes this dataset, which these reports read.
 You do not have to set anything up to get the events. They are always recorded. Sending
 them somewhere is one setting.
 
-## What is recorded
+### What is recorded
 
 | When | Event | Says |
 |---|---|---|
@@ -33,7 +58,7 @@ How pipeyard's things are named in the events:
 Datasets follow OpenLineage's naming convention for S3, so a tool that already knows about
 the same bucket from another system will recognise them as the same datasets.
 
-## Looking at the events
+### Looking at the events
 
 ```sh
 curl localhost:8000/api/runs/$RUN_ID/lineage -H "Authorization: Bearer $TOKEN"
@@ -64,7 +89,7 @@ returns the events for a run as a JSON list. A shortened `COMPLETE` event:
 OpenLineage run ids must be UUIDs, so each is derived from pipeyard's own run id and is the
 same every time. The events are also kept in S3 under `orgs/{org}/lineage/{run_id}/`.
 
-## Sending the events to a lineage tool
+### Sending the events to a lineage tool
 
 Set the address of an OpenLineage HTTP endpoint and pipeyard posts each event there as it
 happens. The variable names are the ones the standard's own clients use:
@@ -94,6 +119,9 @@ that is unavailable never fails or delays a run, and the events are still in S3.
 
 ## Limits
 
+- **The diagram inside pipeyard shows declared lineage, one step each way.** It comes from
+  the pipeline definitions, not from the recorded events, and shows direct writers and
+  readers rather than the whole chain at once.
 - **Not tested against a real lineage tool.** The events validate against the official
   OpenLineage JSON schemas, and pipeyard has been run posting to a stand-in HTTP server, but
   nobody has yet pointed it at Marquez or another product.

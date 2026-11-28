@@ -78,6 +78,15 @@
     .report-frame { display: block; width: 100%; height: 76vh; background: #fff; }
     button.quiet { background: transparent; color: var(--text); border-color: var(--border); }
     .err.warn { color: var(--run); }
+    .flow { display: flex; align-items: center; gap: 14px; padding: 16px 14px; overflow-x: auto; }
+    .flow .stage { display: flex; flex-direction: column; gap: 8px; }
+    .flow .arrow { color: var(--muted); font-size: 20px; }
+    .flow .node { border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px;
+                  display: flex; flex-direction: column; gap: 1px; white-space: nowrap; }
+    .flow .node.here { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    .flow .node.none { color: var(--muted); border-style: dashed; }
+    .flow .kind { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .flow .status { font-size: 12.5px; }
     .status.starting { color: var(--run); } .status.stopped { color: var(--muted); }
     .empty p { margin: 8px 0 14px; }
     form.login { max-width: 340px; margin: 60px auto; padding: 24px; }

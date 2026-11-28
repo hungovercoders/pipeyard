@@ -160,6 +160,7 @@ Everything the UI does is available as JSON. Send `Authorization: Bearer <token>
 | `GET /api/pipelines/{name}/runs` | A pipeline's runs, newest first |
 | `GET /api/runs/{run_id}` | One run. Poll this until `status` is no longer `running`. |
 | `GET /api/runs/{run_id}/lineage` | The [OpenLineage](lineage.md) events recorded for a run or a report start |
+| `GET /api/datasets/{dataset}/lineage` | What writes a dataset and what reads it |
 | `GET /api/datasets` | Datasets, with row counts, schema and contract summary |
 | `PUT /api/datasets/{dataset}/contract` | Register or replace a dataset's data contract. The body is an ODCS document. |
 | `GET`, `DELETE /api/datasets/{dataset}/contract` | Read it back as YAML, or remove it |

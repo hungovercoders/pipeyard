@@ -62,6 +62,8 @@ Now open <http://localhost:8000>. You are signed in as the org `demo`, and you w
   status go from running to succeeded.
 - **Datasets**: `transactions`, with its row count and its data contract: the columns each
   run must have.
+- **Lineage**, on both of those pages: the pipeline writes `transactions`, and the report
+  reads it.
 - **Reports**: **Transactions dashboard**, a Streamlit app running in its own container.
   Filter the categories and the charts update live. Close the tab, and five minutes later
   the container is gone; open the report again and it comes back.
@@ -138,10 +140,13 @@ See [docs/data-contracts.md](docs/data-contracts.md).
 
 ## Lineage
 
-pipeyard records every pipeline run and report as [OpenLineage](https://openlineage.io)
+Every dataset and pipeline page shows its lineage: what writes a dataset, and which
+reports and pipelines read it, so you can see what a change would affect.
+
+pipeyard also records every pipeline run and report as [OpenLineage](https://openlineage.io)
 events: which job ran, what it read, what it wrote. Set `OPENLINEAGE_URL` and they are sent
-to any OpenLineage tool, such as Marquez or DataHub, which can then draw the graph from
-pipeline to dataset to report. See [docs/lineage.md](docs/lineage.md).
+to any OpenLineage tool, such as Marquez or DataHub, to sit alongside lineage from your
+other systems. See [docs/lineage.md](docs/lineage.md).
 
 ## Architecture
 
@@ -244,7 +249,7 @@ v0 is deliberately small. These are known gaps, not oversights:
 | [Your first pipeline](docs/your-first-pipeline.md) | Tutorial: build a pipeline and a dashboard, register and run them, and add a data contract, in twenty minutes |
 | [The container contract](docs/container-contract.md) | Reference: `pipeline.yaml`, what pipeline and report containers get and must do, every error |
 | [Data contracts](docs/data-contracts.md) | Holding a dataset to an ODCS contract: schema, quality rules, what is not checked yet |
-| [Lineage](docs/lineage.md) | The OpenLineage events pipeyard records, and sending them to a lineage tool |
+| [Lineage](docs/lineage.md) | The lineage diagram on each page, the OpenLineage events pipeyard records, and sending them to a lineage tool |
 | [How it works](docs/how-it-works.md) | A run and a report from click to screen, the storage layout, the API, how orgs are isolated |
 | [Local development](docs/local-development.md) | The task commands, the AWS emulator, tests, troubleshooting |
 | [Deploying to AWS](docs/deploy-aws.md) | Step by step, what is created, v0 tradeoffs |

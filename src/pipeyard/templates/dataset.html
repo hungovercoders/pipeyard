@@ -59,6 +59,13 @@
 <div class="card" style="padding: 12px 14px"><div class="chips">{% for col in dataset.schema %}<span class="chip mono">{{ col.name }} <span>{{ col.type }}</span></span>{% endfor %}</div></div>
 {% endif %}
 
+<h2>Lineage</h2>
+{% set writers = [] %}{% for w in flow.written_by %}{{ writers.append({"kind": "pipeline", "label": w.pipeline, "href": "/pipelines/" ~ w.pipeline, "note": w.latest_status}) or "" }}{% endfor %}
+{% set readers = [] %}{% for r in flow.read_by %}{{ readers.append({"kind": r.kind, "label": r.report if r.kind == "report" else r.pipeline, "href": ("/pipelines/" ~ r.pipeline ~ "/reports/" ~ r.slug) if r.kind == "report" else ("/pipelines/" ~ r.pipeline)}) or "" }}{% endfor %}
+{% set stages = [writers, [{"kind": "dataset", "label": dataset.dataset, "here": true}], readers] %}
+{% include "_flow.html" %}
+<p class="sub" style="margin-top: 10px">Written by the pipelines on the left, read by the reports and pipelines on the right.</p>
+
 <h2>Recent runs</h2>
 <div class="card scroll">
   {% if runs %}

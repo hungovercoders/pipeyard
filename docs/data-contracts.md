@@ -16,7 +16,7 @@ A contract is optional. A dataset without one accepts whatever a run writes, as 
 ![A dataset page showing its data contract, quality rules, and a run that failed them](dataset-contract.png)
 
 *A dataset's page: its contract, the quality rules and what happens when each is not met,
-and its runs. Here two rules had just been tightened, so the next run failed and says
+its lineage, and its runs. Here two rules had just been tightened, so the next run failed and says
 exactly why, while the earlier run's 10,000 rows remain.*
 
 ## A contract
