@@ -36,6 +36,10 @@ class PipeyardStack(Stack):
         *,
         org_id: str,
         certificate_arn: str | None = None,
+        domain_name: str | None = None,
+        oidc_issuer: str | None = None,
+        oidc_client_id: str | None = None,
+        oidc_org_claim: str | None = None,
         openlineage_url: str | None = None,
         **kwargs,
     ) -> None:
@@ -130,32 +134,85 @@ class PipeyardStack(Stack):
         )
 
         # --- auth --------------------------------------------------------------------
-        user_pool = cognito.UserPool(
-            self,
-            "Users",
-            self_sign_up_enabled=False,
-            sign_in_aliases=cognito.SignInAliases(email=True),
-            # Immutable and not client-writable: a user cannot move themselves to another org.
-            custom_attributes={"org_id": cognito.StringAttribute(mutable=False, max_len=63)},
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-        client = user_pool.add_client(
-            "App",
-            auth_flows=cognito.AuthFlow(user_password=True),
-            generate_secret=False,
-            id_token_validity=Duration.hours(1),
-            read_attributes=cognito.ClientAttributes()
-            .with_standard_attributes(email=True, email_verified=True)
-            .with_custom_attributes("org_id"),
-            write_attributes=cognito.ClientAttributes().with_standard_attributes(email=True),
-        )
-
-        # --- control plane -----------------------------------------------------------
         certificate = (
             acm.Certificate.from_certificate_arn(self, "Certificate", certificate_arn)
             if certificate_arn
             else None
         )
+        # Where browsers reach pipeyard. Known only when you bring a domain and certificate.
+        public_url = f"https://{domain_name}" if certificate and domain_name else None
+
+        # Three ways to sign in, most to least preferable:
+        #   1. your own OpenID Connect provider (-c oidc_issuer=... -c oidc_client_id=...),
+        #   2. the Cognito pool below through its hosted sign-in page, which needs an HTTPS
+        #      address to come back to (-c certificate_arn=... -c domain_name=...),
+        #   3. the Cognito pool through pipeyard's own password form: the fallback for a
+        #      first deploy with no domain.
+        sign_in: dict[str, str] = {}
+        user_pool = client = None
+        if oidc_issuer:
+            if not oidc_client_id:
+                raise ValueError("oidc_issuer needs oidc_client_id")
+            sign_in = {
+                "PIPEYARD_OIDC_ISSUER": oidc_issuer,
+                "PIPEYARD_OIDC_CLIENT_ID": oidc_client_id,
+                "PIPEYARD_OIDC_ORG_CLAIM": oidc_org_claim or "org_id",
+            }
+        else:
+            user_pool = cognito.UserPool(
+                self,
+                "Users",
+                self_sign_up_enabled=False,
+                sign_in_aliases=cognito.SignInAliases(email=True),
+                # Immutable and not client-writable: nobody can move themselves to another org.
+                custom_attributes={"org_id": cognito.StringAttribute(mutable=False, max_len=63)},
+                removal_policy=RemovalPolicy.DESTROY,
+            )
+            client = user_pool.add_client(
+                "App",
+                auth_flows=cognito.AuthFlow(user_password=True),
+                generate_secret=False,
+                id_token_validity=Duration.hours(1),
+                read_attributes=cognito.ClientAttributes()
+                .with_standard_attributes(email=True, email_verified=True)
+                .with_custom_attributes("org_id"),
+                write_attributes=cognito.ClientAttributes().with_standard_attributes(email=True),
+                disable_o_auth=not public_url,
+                o_auth=cognito.OAuthSettings(
+                    flows=cognito.OAuthFlows(authorization_code_grant=True),
+                    scopes=[
+                        cognito.OAuthScope.OPENID,
+                        cognito.OAuthScope.EMAIL,
+                        cognito.OAuthScope.PROFILE,
+                    ],
+                    callback_urls=[f"{public_url}/auth/callback"],
+                    logout_urls=[f"{public_url}/login"],
+                )
+                if public_url
+                else None,
+            )
+            sign_in = {
+                "PIPEYARD_COGNITO_POOL_ID": user_pool.user_pool_id,
+                "PIPEYARD_COGNITO_CLIENT_ID": client.user_pool_client_id,
+            }
+            if public_url:
+                # The hosted sign-in page lives on a Cognito domain; the prefix must be
+                # unique in the region, hence the account id.
+                user_pool.add_domain(
+                    "SignInDomain",
+                    cognito_domain=cognito.CognitoDomainOptions(
+                        domain_prefix=f"pipeyard-{self.account}"
+                    ),
+                )
+                sign_in |= {
+                    "PIPEYARD_OIDC_ISSUER": user_pool.user_pool_provider_url,
+                    "PIPEYARD_OIDC_CLIENT_ID": client.user_pool_client_id,
+                    "PIPEYARD_OIDC_ORG_CLAIM": "custom:org_id",
+                }
+        if public_url:
+            sign_in["PIPEYARD_PUBLIC_URL"] = public_url
+
+        # --- control plane -----------------------------------------------------------
         service = ecs_patterns.ApplicationLoadBalancedFargateService(
             self,
             "ControlPlane",
@@ -184,8 +241,7 @@ class PipeyardStack(Stack):
                     "PIPEYARD_MODE": "aws",
                     "PIPEYARD_BUCKET": bucket.bucket_name,
                     "AWS_REGION": self.region,
-                    "PIPEYARD_COGNITO_POOL_ID": user_pool.user_pool_id,
-                    "PIPEYARD_COGNITO_CLIENT_ID": client.user_pool_client_id,
+                    **sign_in,
                     "PIPEYARD_ECS_CLUSTER": cluster.cluster_name,
                     "PIPEYARD_RUN_TASK_TEMPLATE": template.family,
                     "PIPEYARD_RUN_SUBNETS": ",".join(s.subnet_id for s in vpc.public_subnets),
@@ -272,10 +328,16 @@ class PipeyardStack(Stack):
         )
 
         scheme = "https://" if certificate else "http://"
-        CfnOutput(self, "Url", value=scheme + service.load_balancer.load_balancer_dns_name)
+        address = scheme + service.load_balancer.load_balancer_dns_name
+        CfnOutput(self, "Url", value=public_url or address)
+        if public_url:  # point your domain's DNS at this
+            CfnOutput(
+                self, "LoadBalancerDnsName", value=service.load_balancer.load_balancer_dns_name
+            )
         CfnOutput(self, "OrgId", value=org_id)
         CfnOutput(self, "BucketName", value=bucket.bucket_name)
         CfnOutput(self, "EcrRepositoryUri", value=repo.repository_uri)
-        CfnOutput(self, "UserPoolId", value=user_pool.user_pool_id)
-        CfnOutput(self, "UserPoolClientId", value=client.user_pool_client_id)
+        if user_pool and client:
+            CfnOutput(self, "UserPoolId", value=user_pool.user_pool_id)
+            CfnOutput(self, "UserPoolClientId", value=client.user_pool_client_id)
         CfnOutput(self, "RunLogGroup", value=run_logs.log_group_name)

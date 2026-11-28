@@ -42,6 +42,28 @@ Open the `Url` from `task outputs` and sign in.
 To also send [lineage](lineage.md) events to an OpenLineage server, add
 `-c openlineage_url=https://...` to the deploy command.
 
+## Signing in
+
+The stack can sign people in three ways. Which one you get depends on what you pass to
+`task deploy`. [Signing in](sign-in.md) explains the mechanics.
+
+| You pass | You get |
+|---|---|
+| nothing | A Cognito user pool and pipeyard's own password form, over plain HTTP. For a first look only. |
+| `-c certificate_arn=... -c domain_name=pipeyard.example.com` | HTTPS, and sign-in through Cognito's hosted page using OpenID Connect. pipeyard never sees a password. |
+| `-c oidc_issuer=... -c oidc_client_id=...` (with the certificate and domain) | Sign-in through your own provider (Okta, Entra ID, Keycloak...). No Cognito user pool is created. Add `-c oidc_org_claim=...` if your org claim is not called `org_id`. |
+
+For either of the last two:
+
+1. Create an ACM certificate for a domain you control, in the region you deploy to.
+2. Deploy with `-c certificate_arn=<its ARN> -c domain_name=<the domain>`.
+3. Point the domain's DNS at the `LoadBalancerDnsName` output.
+4. With your own provider, register `https://<the domain>/auth/callback` as the redirect
+   address there.
+
+`task create-user` and `task demo-aws` use the Cognito user pool, so they apply to the
+first two options only. With your own provider, users and their org are managed there.
+
 ## Running your own pipeline in AWS
 
 It is the same pipeline as locally, with two differences: the images must live somewhere
@@ -71,7 +93,7 @@ locally, typically under a minute, while Fargate provisions the task. Container 
 | ECS cluster | Fargate only; nothing runs when no pipeline is running, except pipeyard itself |
 | pipeyard service | One Fargate task behind an Application Load Balancer |
 | Run task template | The security settings every run inherits: read-only filesystem, `/tmp` scratch volume, logging, and the timeout sidecar. pipeyard copies it per pipeline, swapping in your image, cpu and memory. |
-| Cognito user pool | Sign-in. Each user has an `org_id` that cannot be changed after creation, by the user or by the app. |
+| Cognito user pool | Sign-in, unless you bring your own provider. Each user has an `org_id` that cannot be changed after creation, by the user or by the app. |
 | Run role | The one IAM role allowed to touch data, and only under `orgs/{org_id}/` |
 | Two security groups | Pipeline runs accept no connections at all. Report apps accept connections from pipeyard only, on port 8080. |
 | VPC | Two public subnets, no NAT gateway |
@@ -87,15 +109,10 @@ pipeyard can connect to a report container, but both can call *out* to anywhere 
 internet. To tighten: private subnets, VPC
 endpoints, and an egress allow-list.
 
-**Plain HTTP unless you bring a certificate.** A bare load balancer has no certificate, so
-by default the sign-in form sends your password unencrypted. For anything beyond a quick
-trial, create an ACM certificate for a domain you control, point the domain at the load
-balancer, and deploy with:
-
-```sh
-task deploy -- -c certificate_arn=arn:aws:acm:...
-```
-
+**Plain HTTP and a password form unless you bring a domain.** A bare load balancer has no
+certificate, so by default pipeyard is served over HTTP and signs people in with its own
+form, which sends the password unencrypted. That is for a first look only. See
+[Signing in](#signing-in) below for the two proper options.
 That switches to HTTPS, redirects HTTP, and marks the session cookie `Secure`.
 
 **Run credentials travel as environment variables.** pipeyard assumes the run role with

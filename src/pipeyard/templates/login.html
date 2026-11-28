@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Sign in · pipeyard{% endblock %}
 {% block main %}
+{% if kind == "oidc" %}
+<div class="card login">
+  <h1>{{ "Sign-in did not complete" if error else "You are signed out" }}</h1>
+  {% if error %}<p class="status failed">{{ error }}</p>{% endif %}
+  <p class="sub">pipeyard signs you in through your organisation's sign-in provider.</p>
+  <a class="button" href="/login?next={{ next | urlencode }}">Sign in</a>
+</div>
+{% else %}
 <form class="card login" method="post" action="/login?next={{ next | urlencode }}">
   <h1>Sign in</h1>
   {% if error %}<p class="status failed">{{ error }}</p>{% endif %}
@@ -8,4 +16,5 @@
   <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
   <button>Sign in</button>
 </form>
+{% endif %}
 {% endblock %}
